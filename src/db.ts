@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS triggers (
   request TEXT NOT NULL,
   expected TEXT
 );
+
+-- The simulation package load_simulation loaded into this (then-empty) database,
+-- if any. A row here is both the proof a package was loaded and the create-only
+-- guard: load_simulation refuses while this table is non-empty.
+CREATE TABLE IF NOT EXISTS simulation_load (
+  id TEXT PRIMARY KEY,
+  at TEXT DEFAULT (datetime('now')),
+  name TEXT NOT NULL,
+  package_sha256 TEXT NOT NULL
+);
 `;
 
 /** Tables that carry an authorizing receipt_id (Content Provenance §4.1). */

@@ -63,6 +63,7 @@ export async function exportRecord(db: Db, mode = getMode()) {
     orders: await db.all<any>(`SELECT * FROM orders ORDER BY created_at, number`),
     changes: await db.all<any>(`SELECT * FROM changes ORDER BY at`),
     refusals: await db.all<any>(`SELECT * FROM refusals ORDER BY at`),
+    simulation_load: await db.all<any>(`SELECT * FROM simulation_load ORDER BY at`),
   };
 }
 

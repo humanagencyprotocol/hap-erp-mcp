@@ -9,9 +9,16 @@ import { list_items, get_item } from "./tools/items.js";
 import { find_customers, get_customer } from "./tools/customers.js";
 import { create_quote, update_quote, send_quote, list_quotes, get_quote } from "./tools/quotes.js";
 import { convert_quote_to_order, list_orders, get_order } from "./tools/orders.js";
+import { load_simulation } from "./tools/simulation.js";
 
 /** Tools that change the ERP — the ones the gateway issues a ticket for. */
-export const CHANGE_TOOLS = new Set(["create_quote", "update_quote", "send_quote", "convert_quote_to_order"]);
+export const CHANGE_TOOLS = new Set([
+  "create_quote",
+  "update_quote",
+  "send_quote",
+  "convert_quote_to_order",
+  "load_simulation",
+]);
 
 async function runTool(db: Db, name: string, args: Record<string, any>): Promise<unknown> {
   switch (name) {
@@ -27,6 +34,7 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
     case "update_quote": return update_quote(db, args);
     case "send_quote": return send_quote(db, args);
     case "convert_quote_to_order": return convert_quote_to_order(db, args);
+    case "load_simulation": return load_simulation(db, args);
     default: throw new Error(`Unknown tool: ${name}`);
   }
 }
