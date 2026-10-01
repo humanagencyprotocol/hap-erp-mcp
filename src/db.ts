@@ -278,12 +278,14 @@ export async function createDb(company: Company = resolveCompany()): Promise<Db>
   // SQLite path — honor HAP_DATA_DIR so docker (with a mounted /app/data) and
   // local dev (~/.hap) write to the same place the gateway uses. The gateway
   // injects HAP_DATA_DIR into the child env when spawning this MCP server.
-  const hapDir = process.env.HAP_DATA_DIR ?? join(homedir(), ".hap");
-  if (!existsSync(hapDir)) {
-    mkdirSync(hapDir, { recursive: true });
+  // Only create the data directory when the default path is actually used — an
+  // explicit DATABASE_URL must not leave an empty ~/.hap behind.
+  let dbPath = databaseUrl;
+  if (!dbPath) {
+    const hapDir = process.env.HAP_DATA_DIR ?? join(homedir(), ".hap");
+    if (!existsSync(hapDir)) mkdirSync(hapDir, { recursive: true });
+    dbPath = join(hapDir, "erp.db");
   }
-
-  const dbPath = databaseUrl || join(hapDir, "erp.db");
   maybeBackupSqlite(dbPath);
 
   console.error(`[erp-mcp] using SQLite at ${dbPath}`);
