@@ -2,7 +2,7 @@
  * Local operator commands. Deliberately NOT MCP tools: the agent under test must
  * be able neither to read nor to change the record its work is measured by.
  *
- *   erp-mcp export                 everything needed to line up trigger → ticket → effect
+ *   erp-mcp export                 everything needed to line up trigger → ticket → effect (changes + refusals)
  *   erp-mcp scenario next <file>   hand over the next request, record when
  *   erp-mcp scenario status <file> which requests were handed over, which are pending
  */
@@ -61,6 +61,7 @@ export async function exportRecord(db: Db, mode = getMode()) {
     })),
     quotes: quotes.map((q) => ({ ...q, lines: byQuote.get(q.id) ?? [] })),
     orders: await db.all<any>(`SELECT * FROM orders ORDER BY created_at, number`),
+    changes: await db.all<any>(`SELECT * FROM changes ORDER BY at`),
     refusals: await db.all<any>(`SELECT * FROM refusals ORDER BY at`),
   };
 }

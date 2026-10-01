@@ -82,6 +82,20 @@ CREATE TABLE IF NOT EXISTS refusals (
   message TEXT NOT NULL
 );
 
+-- Every change the ERP performed, one row per call — the effect each ticket produced.
+-- A document's own receipt_id column holds only its latest ticket (send overwrites
+-- create), so this table, not the document, is what lines up ticket ↔ effect 1:1.
+CREATE TABLE IF NOT EXISTS changes (
+  id TEXT PRIMARY KEY,
+  at TEXT DEFAULT (datetime('now')),
+  tool TEXT NOT NULL,
+  receipt_id TEXT,
+  document_id TEXT,
+  document_number TEXT,
+  status TEXT,
+  net_total REAL
+);
+
 -- Scenario requests handed to the agent, with the moment they were handed over.
 CREATE TABLE IF NOT EXISTS triggers (
   scenario_id TEXT PRIMARY KEY,

@@ -32,7 +32,8 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
 }
 
 /**
- * Run a tool in the given mode. A refused change call is recorded with the
+ * Run a tool in the given mode. Every successful change is recorded (`changes`)
+ * with the receipt_id the gateway injected; a refused change call is recorded with the
  * receipt_id the gateway injected — that is the trace of a ticket whose action
  * never happened. In live mode nothing runs and nothing is recorded locally:
  * there is no local system to have refused anything.
@@ -40,13 +41,24 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
 export async function callTool(db: Db, mode: ErpMode, name: string, args: Record<string, any>): Promise<unknown> {
   if (mode === "live") throw new Error(LIVE_NOT_AVAILABLE);
   try {
-    return await runTool(db, name, args);
+    const result = await runTool(db, name, args);
+    if (CHANGE_TOOLS.has(name)) {
+      const doc = (result ?? {}) as Record<string, unknown>;
+      await db.run(
+        `INSERT INTO changes (id, at, tool, receipt_id, document_id, document_number, status, net_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          randomUUID(), new Date().toISOString(), name, typeof args.receipt_id === "string" ? args.receipt_id : null,
+          doc.id ?? null, doc.number ?? null, doc.status ?? null, typeof doc.net_total === "number" ? doc.net_total : null,
+        ],
+      );
+    }
+    return result;
   } catch (err) {
     if (CHANGE_TOOLS.has(name)) {
       const message = err instanceof Error ? err.message : String(err);
       const receiptId = typeof args.receipt_id === "string" ? args.receipt_id : null;
-      await db.run(`INSERT INTO refusals (id, tool, receipt_id, message) VALUES (?, ?, ?, ?)`, [
-        randomUUID(), name, receiptId, message,
+      await db.run(`INSERT INTO refusals (id, at, tool, receipt_id, message) VALUES (?, ?, ?, ?, ?)`, [
+        randomUUID(), new Date().toISOString(), name, receiptId, message,
       ]);
     }
     throw err;

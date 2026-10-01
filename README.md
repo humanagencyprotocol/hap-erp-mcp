@@ -148,6 +148,12 @@ database with the company's items, prices, stock and customers (invented but
 realistic test data). The file is validated strictly and refused whole on the
 first problem. Example: [`examples/company.example.json`](examples/company.example.json).
 
+**Changes.** Every change the connector performs is recorded as its own entry —
+time, tool, document, status, amount, and the `receipt_id` the gateway injected.
+A document only keeps its latest `receipt_id` (sending a quote replaces the one
+from creating it), so this record, not the document, lines up ticket and effect
+one to one.
+
 **Refusals after the gateway.** When the connector refuses a change call the
 gateway already let through (false declared value, credit limit, stock, wrong
 state), it records the refusal with the `receipt_id` the gateway injected. A
@@ -161,12 +167,12 @@ Point them at the same database the gateway uses — for a gateway install that 
 ```bash
 HAP_DATA_DIR=~/.suveren erp-mcp scenario next examples/scenario.example.json   # hand over the next request, record the time
 HAP_DATA_DIR=~/.suveren erp-mcp scenario status examples/scenario.example.json
-HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # triggers, quotes + lines, orders, refusals, mode
+HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # triggers, changes, refusals, quotes + lines, orders, mode
 ```
 
 The export lines up **trigger → ticket → effect**: each request's hand-over time,
-each quote and order with the `receipt_id` of the ticket that authorised it, and
-each refusal with the `receipt_id` of the ticket whose action did not happen.
+each change with the `receipt_id` of the ticket that authorised it, and each
+refusal with the `receipt_id` of the ticket whose action did not happen.
 
 ---
 

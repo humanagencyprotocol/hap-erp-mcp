@@ -146,9 +146,29 @@ describe("refusals after the gateway let a call through", () => {
     expect(await db.all(`SELECT * FROM refusals`)).toHaveLength(0);
   });
 
-  it("does not record a successful change", async () => {
+  it("records a successful change as a change, not a refusal", async () => {
     await callTool(db, "simulation", "create_quote", { ...quote(), receipt_id: "t-ok" });
     expect(await db.all(`SELECT * FROM refusals`)).toHaveLength(0);
+    expect(await db.all<any>(`SELECT tool, receipt_id, document_number, status, net_total FROM changes`)).toEqual([
+      { tool: "create_quote", receipt_id: "t-ok", document_number: "Q-0001", status: "draft", net_total: 37 },
+    ]);
+  });
+
+  it("keeps one change per ticket even when several tickets act on the same document", async () => {
+    // The quote row only holds its latest receipt_id (send overwrites create). The
+    // change record must still show both tickets — otherwise create's ticket has no trace.
+    const q = (await callTool(db, "simulation", "create_quote", { ...quote(), receipt_id: "t-create" })) as any;
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", receipt_id: "t-send" });
+    expect((await db.get<any>(`SELECT receipt_id FROM quotes WHERE id = ?`, [q.id]))!.receipt_id).toBe("t-send");
+    expect((await db.all<any>(`SELECT receipt_id, status FROM changes ORDER BY at`))).toEqual([
+      { receipt_id: "t-create", status: "draft" },
+      { receipt_id: "t-send", status: "sent" },
+    ]);
+  });
+
+  it("records no change for a read", async () => {
+    await callTool(db, "simulation", "list_items", {});
+    expect(await db.all(`SELECT * FROM changes`)).toHaveLength(0);
   });
 });
 
@@ -190,5 +210,6 @@ describe("scenario and export", () => {
     expect(rec.quotes).toEqual([expect.objectContaining({ number: "Q-0001", status: "sent", net_total: 37, receipt_id: "t-send" })]);
     expect(rec.quotes[0].lines).toHaveLength(2);
     expect(rec.refusals).toEqual([expect.objectContaining({ receipt_id: "t-false", tool: "create_quote" })]);
+    expect(rec.changes.map((c: any) => [c.tool, c.receipt_id])).toEqual([["create_quote", "t-quote"], ["send_quote", "t-send"]]);
   });
 });
