@@ -123,8 +123,56 @@ the declared value, and the computed/expected value.
 **Postgres** — set `DATABASE_URL` to a connection string. For teams where
 multiple gateways need shared access.
 
-Schema is created automatically on first start, and a deterministic demo
-dataset is seeded when the `items` table is empty.
+Schema is created automatically on first start. An empty database is seeded
+from the company file (`ERP_COMPANY_FILE`, see below) or, without one, from a
+deterministic demo dataset.
+
+---
+
+## Simulation mode
+
+The connector has a switch, `ERP_MODE`:
+
+| Mode | What answers | Status |
+|---|---|---|
+| `simulation` (default) | the built-in simulated ERP (the database above) | available |
+| `live` | the company's real ERP | no adapter in 0.x — **every call is refused** with a clear message, nothing is read or changed |
+
+The point: a three-week test runs on exactly this connector, its tools and its
+HAP profile. Only the system behind it is simulated, so the tickets issued during
+the test are the same tickets that will be issued live. Going live = switch the
+mode and connect the real system; mandates and agent setup stay as they are.
+
+**Company file.** `ERP_COMPANY_FILE=/path/to/company.json` seeds an empty
+database with the company's items, prices, stock and customers (invented but
+realistic test data). The file is validated strictly and refused whole on the
+first problem. Example: [`examples/company.example.json`](examples/company.example.json).
+
+**Changes.** Every change the connector performs is recorded as its own entry —
+time, tool, document, status, amount, and the `receipt_id` the gateway injected.
+A document only keeps its latest `receipt_id` (sending a quote replaces the one
+from creating it), so this record, not the document, lines up ticket and effect
+one to one.
+
+**Refusals after the gateway.** When the connector refuses a change call the
+gateway already let through (false declared value, credit limit, stock, wrong
+state), it records the refusal with the `receipt_id` the gateway injected. A
+ticket then exists for an action that never happened, and this record is the
+only place that says so.
+
+**Local commands** (not MCP tools — the agent can neither read nor change them).
+Point them at the same database the gateway uses — for a gateway install that is
+`HAP_DATA_DIR=~/.suveren`:
+
+```bash
+HAP_DATA_DIR=~/.suveren erp-mcp scenario next examples/scenario.example.json   # hand over the next request, record the time
+HAP_DATA_DIR=~/.suveren erp-mcp scenario status examples/scenario.example.json
+HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # triggers, changes, refusals, quotes + lines, orders, mode
+```
+
+The export lines up **trigger → ticket → effect**: each request's hand-over time,
+each change with the `receipt_id` of the ticket that authorised it, and each
+refusal with the `receipt_id` of the ticket whose action did not happen.
 
 ---
 

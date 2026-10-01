@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, copyFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { loadCompanyFile, type Company } from "./company.js";
 
 export interface Db {
   run(sql: string, params?: any[]): Promise<void>;
@@ -69,60 +70,111 @@ CREATE TABLE IF NOT EXISTS orders (
   updated_at TEXT DEFAULT (datetime('now')),
   receipt_id TEXT
 );
+
+-- Calls the connector refused AFTER the gateway let them through. When the gateway
+-- injected a receipt_id, a ticket exists for an action that never happened; this
+-- table is the only place that says so (the ticket alone reads like a done action).
+CREATE TABLE IF NOT EXISTS refusals (
+  id TEXT PRIMARY KEY,
+  at TEXT DEFAULT (datetime('now')),
+  tool TEXT NOT NULL,
+  receipt_id TEXT,
+  message TEXT NOT NULL
+);
+
+-- Every change the ERP performed, one row per call — the effect each ticket produced.
+-- A document's own receipt_id column holds only its latest ticket (send overwrites
+-- create), so this table, not the document, is what lines up ticket ↔ effect 1:1.
+CREATE TABLE IF NOT EXISTS changes (
+  id TEXT PRIMARY KEY,
+  at TEXT DEFAULT (datetime('now')),
+  tool TEXT NOT NULL,
+  receipt_id TEXT,
+  document_id TEXT,
+  document_number TEXT,
+  status TEXT,
+  net_total REAL
+);
+
+-- Scenario requests handed to the agent, with the moment they were handed over.
+CREATE TABLE IF NOT EXISTS triggers (
+  scenario_id TEXT PRIMARY KEY,
+  triggered_at TEXT DEFAULT (datetime('now')),
+  request TEXT NOT NULL,
+  expected TEXT
+);
 `;
 
 /** Tables that carry an authorizing receipt_id (Content Provenance §4.1). */
 const RECEIPT_ID_TABLES = ["quotes", "orders"];
 
-/** Deterministic demo dataset, seeded once when the items table is empty. */
-const SEED_ITEMS: Array<[string, string, string, string, number, number]> = [
-  // id, sku, name, unit, list_price, stock
-  ["item-1", "WIDGET-100", "Widget 100", "pcs", 25.0, 500],
-  ["item-2", "WIDGET-200", "Widget 200 Pro", "pcs", 45.0, 300],
-  ["item-3", "GEAR-A1", "Precision Gear A1", "pcs", 120.0, 80],
-  ["item-4", "GEAR-B2", "Precision Gear B2", "pcs", 150.0, 60],
-  ["item-5", "PANEL-S", "Control Panel S", "pcs", 89.5, 150],
-  ["item-6", "PANEL-L", "Control Panel L", "pcs", 149.5, 90],
-  ["item-7", "CABLE-5M", "Cable 5m", "pcs", 12.0, 1000],
-  ["item-8", "SERVICE-KIT", "Maintenance Kit", "set", 340.0, 20],
-];
+/** Demo company used when no ERP_COMPANY_FILE is given. Deterministic. */
+export const DEMO_COMPANY: Company = {
+  name: "Demo Industrial",
+  currency: "EUR",
+  items: [
+    { id: "item-1", sku: "WIDGET-100", name: "Widget 100", unit: "pcs", list_price: 25.0, stock: 500 },
+    { id: "item-2", sku: "WIDGET-200", name: "Widget 200 Pro", unit: "pcs", list_price: 45.0, stock: 300 },
+    { id: "item-3", sku: "GEAR-A1", name: "Precision Gear A1", unit: "pcs", list_price: 120.0, stock: 80 },
+    { id: "item-4", sku: "GEAR-B2", name: "Precision Gear B2", unit: "pcs", list_price: 150.0, stock: 60 },
+    { id: "item-5", sku: "PANEL-S", name: "Control Panel S", unit: "pcs", list_price: 89.5, stock: 150 },
+    { id: "item-6", sku: "PANEL-L", name: "Control Panel L", unit: "pcs", list_price: 149.5, stock: 90 },
+    { id: "item-7", sku: "CABLE-5M", name: "Cable 5m", unit: "pcs", list_price: 12.0, stock: 1000 },
+    { id: "item-8", sku: "SERVICE-KIT", name: "Maintenance Kit", unit: "set", list_price: 340.0, stock: 20 },
+  ],
+  customers: [
+    { id: "cust-1", name: "Nordkap Manufacturing GmbH", email: "ap@nordkap.example", country: "DE", credit_limit: 50000, open_balance: 12000, payment_terms: "NET30" },
+    { id: "cust-2", name: "Alpine Components AG", email: "finance@alpinecomp.example", country: "AT", credit_limit: 20000, open_balance: 4000, payment_terms: "NET30" },
+    { id: "cust-3", name: "Baltic Retail Group", email: "accounts@balticretail.example", country: "LV", credit_limit: 8000, open_balance: 7500, payment_terms: "NET14" },
+    { id: "cust-4", name: "Meridian Industrial Ltd", email: "payables@meridianind.example", country: "IE", credit_limit: 100000, open_balance: 0, payment_terms: "NET60" },
+    { id: "cust-5", name: "Solstice Equipment Co", email: "finance@solsticeeq.example", country: "NL", credit_limit: 5000, open_balance: 4800, payment_terms: "NET7" },
+  ],
+};
 
-const SEED_CUSTOMERS: Array<[string, string, string, string, number, number, string]> = [
-  // id, name, email, country, credit_limit, open_balance, payment_terms
-  ["cust-1", "Nordkap Manufacturing GmbH", "ap@nordkap.example", "DE", 50000, 12000, "NET30"],
-  ["cust-2", "Alpine Components AG", "finance@alpinecomp.example", "AT", 20000, 4000, "NET30"],
-  ["cust-3", "Baltic Retail Group", "accounts@balticretail.example", "LV", 8000, 7500, "NET14"],
-  ["cust-4", "Meridian Industrial Ltd", "payables@meridianind.example", "IE", 100000, 0, "NET60"],
-  ["cust-5", "Solstice Equipment Co", "finance@solsticeeq.example", "NL", 5000, 4800, "NET7"],
-];
+const INSERT_ITEM = `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+const INSERT_CUSTOMER = `INSERT INTO customers (id, name, email, country, currency, credit_limit, open_balance, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 
-function seedSqlite(db: import("better-sqlite3").Database): void {
+function companyRows(company: Company): { items: any[][]; customers: any[][] } {
+  return {
+    items: company.items.map((i) => [i.id, i.sku, i.name, i.unit, i.list_price, company.currency, i.stock]),
+    customers: company.customers.map((c) => [
+      c.id, c.name, c.email, c.country, company.currency, c.credit_limit, c.open_balance, c.payment_terms,
+    ]),
+  };
+}
+
+/** The company to seed from: ERP_COMPANY_FILE if set (refused whole if invalid), else the demo. */
+export function resolveCompany(env: NodeJS.ProcessEnv = process.env): Company {
+  const path = env.ERP_COMPANY_FILE?.trim();
+  return path ? loadCompanyFile(path) : DEMO_COMPANY;
+}
+
+function seedSqlite(db: import("better-sqlite3").Database, company: Company): void {
   const { count } = db.prepare("SELECT COUNT(*) as count FROM items").get() as { count: number };
-  if (count > 0) return;
-
-  const insertItem = db.prepare(
-    `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES (?, ?, ?, ?, ?, 'EUR', ?)`
-  );
-  for (const [id, sku, name, unit, listPrice, stock] of SEED_ITEMS) {
-    insertItem.run(id, sku, name, unit, listPrice, stock);
+  if (count > 0) {
+    if (process.env.ERP_COMPANY_FILE) {
+      console.error("[erp-mcp] database already holds data — ERP_COMPANY_FILE not loaded (start from an empty database to load it)");
+    }
+    return;
   }
-
-  const insertCustomer = db.prepare(
-    `INSERT INTO customers (id, name, email, country, currency, credit_limit, open_balance, payment_terms) VALUES (?, ?, ?, ?, 'EUR', ?, ?, ?)`
-  );
-  for (const [id, name, email, country, creditLimit, openBalance, terms] of SEED_CUSTOMERS) {
-    insertCustomer.run(id, name, email, country, creditLimit, openBalance, terms);
-  }
+  const rows = companyRows(company);
+  const insertItem = db.prepare(INSERT_ITEM);
+  const insertCustomer = db.prepare(INSERT_CUSTOMER);
+  db.transaction(() => {
+    for (const r of rows.items) insertItem.run(...r);
+    for (const r of rows.customers) insertCustomer.run(...r);
+  })();
+  console.error(`[erp-mcp] seeded "${company.name}": ${company.items.length} items, ${company.customers.length} customers`);
 }
 
 // SQLite adapter using better-sqlite3 (synchronous API wrapped in async)
-async function createSqliteDb(dbPath: string): Promise<Db> {
+async function createSqliteDb(dbPath: string, company: Company): Promise<Db> {
   const { default: Database } = await import("better-sqlite3");
 
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
-  seedSqlite(db);
+  seedSqlite(db, company);
 
   // Migration: add receipt_id to pre-existing tables (Content Provenance §4.1).
   // ALTER ... ADD COLUMN throws if it already exists, so guard on table_info.
@@ -150,7 +202,7 @@ async function createSqliteDb(dbPath: string): Promise<Db> {
 }
 
 // Postgres adapter using pg Pool
-async function createPostgresDb(connectionString: string): Promise<Db> {
+async function createPostgresDb(connectionString: string, company: Company): Promise<Db> {
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString });
 
@@ -171,18 +223,9 @@ async function createPostgresDb(connectionString: string): Promise<Db> {
     }
     const { rows } = await client.query("SELECT COUNT(*)::int as count FROM items");
     if (rows[0].count === 0) {
-      for (const [id, sku, name, unit, listPrice, stock] of SEED_ITEMS) {
-        await client.query(
-          `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES ($1, $2, $3, $4, $5, 'EUR', $6)`,
-          [id, sku, name, unit, listPrice, stock]
-        );
-      }
-      for (const [id, name, email, country, creditLimit, openBalance, terms] of SEED_CUSTOMERS) {
-        await client.query(
-          `INSERT INTO customers (id, name, email, country, currency, credit_limit, open_balance, payment_terms) VALUES ($1, $2, $3, $4, 'EUR', $5, $6, $7)`,
-          [id, name, email, country, creditLimit, openBalance, terms]
-        );
-      }
+      const seed = companyRows(company);
+      for (const r of seed.items) await client.query(adaptSql(INSERT_ITEM), r);
+      for (const r of seed.customers) await client.query(adaptSql(INSERT_CUSTOMER), r);
     }
   } finally {
     client.release();
@@ -224,25 +267,27 @@ function maybeBackupSqlite(dbPath: string): void {
   }
 }
 
-export async function createDb(): Promise<Db> {
+export async function createDb(company: Company = resolveCompany()): Promise<Db> {
   const databaseUrl = process.env.DATABASE_URL ?? "";
 
   if (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://")) {
     console.error("[erp-mcp] using Postgres");
-    return createPostgresDb(databaseUrl);
+    return createPostgresDb(databaseUrl, company);
   }
 
   // SQLite path — honor HAP_DATA_DIR so docker (with a mounted /app/data) and
   // local dev (~/.hap) write to the same place the gateway uses. The gateway
   // injects HAP_DATA_DIR into the child env when spawning this MCP server.
-  const hapDir = process.env.HAP_DATA_DIR ?? join(homedir(), ".hap");
-  if (!existsSync(hapDir)) {
-    mkdirSync(hapDir, { recursive: true });
+  // Only create the data directory when the default path is actually used — an
+  // explicit DATABASE_URL must not leave an empty ~/.hap behind.
+  let dbPath = databaseUrl;
+  if (!dbPath) {
+    const hapDir = process.env.HAP_DATA_DIR ?? join(homedir(), ".hap");
+    if (!existsSync(hapDir)) mkdirSync(hapDir, { recursive: true });
+    dbPath = join(hapDir, "erp.db");
   }
-
-  const dbPath = databaseUrl || join(hapDir, "erp.db");
   maybeBackupSqlite(dbPath);
 
   console.error(`[erp-mcp] using SQLite at ${dbPath}`);
-  return createSqliteDb(dbPath);
+  return createSqliteDb(dbPath, company);
 }

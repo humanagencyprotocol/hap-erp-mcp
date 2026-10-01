@@ -8,10 +8,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { createDb } from "./db.js";
-import { list_items, get_item } from "./tools/items.js";
-import { find_customers, get_customer } from "./tools/customers.js";
-import { create_quote, update_quote, send_quote, list_quotes, get_quote } from "./tools/quotes.js";
-import { convert_quote_to_order, list_orders, get_order } from "./tools/orders.js";
+import { callTool } from "./dispatch.js";
+import { getMode } from "./mode.js";
+import { runCli } from "./cli.js";
 
 const RECEIPT_FIELD = {
   type: "string" as const,
@@ -201,10 +200,15 @@ const TOOL_DEFINITIONS = [
   },
 ] as const;
 
-type ToolName = (typeof TOOL_DEFINITIONS)[number]["name"];
-
 async function main() {
+  // `erp-mcp export` / `erp-mcp scenario …` are local operator commands, not MCP tools.
+  if (process.argv.length > 2) {
+    process.exit(await runCli(process.argv.slice(2)));
+  }
+
+  const mode = getMode();
   const db = await createDb();
+  console.error(`[erp-mcp] mode: ${mode}`);
 
   const server = new Server(
     { name: "erp", version: "0.1.0" },
@@ -220,48 +224,7 @@ async function main() {
     const safeArgs = (args ?? {}) as Record<string, any>;
 
     try {
-      let result: unknown;
-
-      switch (name as ToolName) {
-        case "list_items":
-          result = await list_items(db, safeArgs);
-          break;
-        case "get_item":
-          result = await get_item(db, safeArgs);
-          break;
-        case "find_customers":
-          result = await find_customers(db, safeArgs);
-          break;
-        case "get_customer":
-          result = await get_customer(db, safeArgs);
-          break;
-        case "list_quotes":
-          result = await list_quotes(db, safeArgs);
-          break;
-        case "get_quote":
-          result = await get_quote(db, safeArgs);
-          break;
-        case "list_orders":
-          result = await list_orders(db, safeArgs);
-          break;
-        case "get_order":
-          result = await get_order(db, safeArgs);
-          break;
-        case "create_quote":
-          result = await create_quote(db, safeArgs);
-          break;
-        case "update_quote":
-          result = await update_quote(db, safeArgs);
-          break;
-        case "send_quote":
-          result = await send_quote(db, safeArgs);
-          break;
-        case "convert_quote_to_order":
-          result = await convert_quote_to_order(db, safeArgs);
-          break;
-        default:
-          throw new Error(`Unknown tool: ${name}`);
-      }
+      const result = await callTool(db, mode, name, safeArgs);
 
       return {
         content: [
