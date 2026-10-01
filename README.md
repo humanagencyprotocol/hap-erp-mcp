@@ -145,8 +145,22 @@ mode and connect the real system; mandates and agent setup stay as they are.
 
 **Company file.** `ERP_COMPANY_FILE=/path/to/company.json` seeds an empty
 database with the company's items, prices, stock and customers (invented but
-realistic test data). The file is validated strictly and refused whole on the
-first problem. Example: [`examples/company.example.json`](examples/company.example.json).
+realistic test data) **at connector start** — still the way to go for local
+development. The file is validated strictly and refused whole on the first
+problem. Example: [`examples/company.example.json`](examples/company.example.json).
+
+**`load_simulation` (MCP tool).** The gateway-facing way to load test data: a
+simulation package — `{ name, currency, customers: [...], products: [...] }`
+(`items` accepted as a legacy alias for `products`) — passed as the `package`
+argument, in the same flat format the CRM connector and the email simulator
+use (they each read only the parts they need; `contacts` and `cases` are
+accepted and ignored here). Simulation mode only; refused in live mode like
+every other tool. **Create only, never edit** — refused once test data was
+already loaded, or any change, quote, or order exists; the auto-seeded demo
+catalog is the one exception, replaced by the first load. Records the
+package's name and the SHA-256 of its canonical (key-order-independent) JSON
+in `simulation_load`. Example package:
+[`examples/package.example.json`](examples/package.example.json).
 
 **Changes.** Every change the connector performs is recorded as its own entry —
 time, tool, document, status, amount, and the `receipt_id` the gateway injected.
@@ -167,7 +181,7 @@ Point them at the same database the gateway uses — for a gateway install that 
 ```bash
 HAP_DATA_DIR=~/.suveren erp-mcp scenario next examples/scenario.example.json   # hand over the next request, record the time
 HAP_DATA_DIR=~/.suveren erp-mcp scenario status examples/scenario.example.json
-HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # triggers, changes, refusals, quotes + lines, orders, mode
+HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # triggers, changes, refusals, quotes + lines, orders, simulation_load, mode
 ```
 
 The export lines up **trigger → ticket → effect**: each request's hand-over time,
