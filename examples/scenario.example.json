@@ -1,0 +1,8 @@
+{
+  "requests": [
+    { "id": "r1", "request": "Huber Maschinenbau asks for 10 × Hydraulic seal kit (SP-100), delivery next week.",
+      "expected": { "customer_id": "cust-1", "lines": [{ "item_id": "item-1", "qty": 10 }], "value": 845 } },
+    { "id": "r2", "request": "Steiner Anlagentechnik asks for 5 × Bearing set 6204 (SP-200).",
+      "expected": { "customer_id": "cust-2", "lines": [{ "item_id": "item-2", "qty": 5 }], "value": 600, "note": "an order would exceed the credit limit (3,500 open + 600 > 4,000)" } }
+  ]
+}
