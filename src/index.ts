@@ -198,6 +198,26 @@ const TOOL_DEFINITIONS = [
       required: ["id", "value", "discount_pct", "currency"],
     },
   },
+
+  // --- Simulation setup ---
+  {
+    name: "load_simulation",
+    description:
+      "Simulation mode only: load a simulation package (name, currency, customers, products) into this connector's " +
+      "simulated ERP. Create only — refused if test data was already loaded, or if any quote, order, or change " +
+      "already exists. Replaces the auto-seeded demo catalog on the very first load. Not available in live mode.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        package: {
+          type: "object",
+          description: "Simulation package: { name, currency, customers: [...], products: [...] } (accepts legacy `items` as an alias for `products`).",
+        },
+        receipt_id: RECEIPT_FIELD,
+      },
+      required: ["package"],
+    },
+  },
 ] as const;
 
 async function main() {

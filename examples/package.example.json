@@ -1,0 +1,51 @@
+{
+  "name": "Bergmann Ersatzteile GmbH",
+  "currency": "EUR",
+  "products": [
+    { "sku": "SP-100", "name": "Hydraulic seal kit", "unit": "set", "list_price": 84.5, "stock": 40 },
+    { "sku": "SP-200", "name": "Bearing set 6204", "unit": "set", "list_price": 120.0, "stock": 10 },
+    { "sku": "SP-310", "name": "Drive belt XPZ 1250", "unit": "pcs", "list_price": 18.9, "stock": 250 }
+  ],
+  "customers": [
+    { "name": "Huber Maschinenbau GmbH", "email": "einkauf@huber.example", "country": "AT", "credit_limit": 15000, "open_balance": 2000, "payment_terms": "NET30" },
+    { "name": "Steiner Anlagentechnik KG", "email": "office@steiner.example", "country": "DE", "credit_limit": 4000, "open_balance": 3500, "payment_terms": "NET14" }
+  ],
+  "cases": [
+    {
+      "id": "case-1",
+      "request": {
+        "from": { "name": "Huber Maschinenbau GmbH", "email": "einkauf@huber.example" },
+        "subject": "Need a replacement hydraulic seal kit",
+        "body": "Our press line is down — can you confirm stock on SP-100 and lead time?"
+      },
+      "reply": {
+        "subject": "Re: Need a replacement hydraulic seal kit",
+        "body": "SP-100 is in stock (40 units) — happy to ship today. Shall I prepare a quote?"
+      }
+    },
+    {
+      "id": "case-2",
+      "request": {
+        "from": { "name": "Steiner Anlagentechnik KG", "email": "office@steiner.example" },
+        "subject": "Bearing set pricing for a repeat order",
+        "body": "We need 10x SP-200 again at the usual terms — can you send a quote?"
+      },
+      "reply": {
+        "subject": "Re: Bearing set pricing for a repeat order",
+        "body": "Quote attached for 10x SP-200 at list price, NET14 as usual."
+      }
+    },
+    {
+      "id": "case-3",
+      "request": {
+        "from": { "name": "Huber Maschinenbau GmbH", "email": "einkauf@huber.example" },
+        "subject": "Drive belt stock check",
+        "body": "Do you have SP-310 in stock? We'd need 25 pcs this week."
+      },
+      "reply": {
+        "subject": "Re: Drive belt stock check",
+        "body": "Yes — 250 pcs in stock. I can reserve 25 for you, let me know and I'll draft the order."
+      }
+    }
+  ]
+}
