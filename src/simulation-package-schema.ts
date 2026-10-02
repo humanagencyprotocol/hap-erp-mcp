@@ -11,9 +11,8 @@
 export const SIMULATION_PACKAGE_SCHEMA = {
   type: "object",
   description:
-    "Simulation package: one company's test world, built from real cases with every identifying detail renamed " +
-    "(approved by a person). The same package is loaded into the email, CRM and ERP simulators; each uses its part " +
-    "and ignores the rest. A system can be loaded once — a second load is refused.",
+    "Simulation package: one company's test world for the email, CRM and ERP simulators — each loads its part and " +
+    "ignores the rest. A simulator can be loaded once; a second load is refused.",
   required: ["name", "currency", "customers", "products", "cases"],
   properties: {
     name: { type: "string", minLength: 1, description: "Company name (renamed), e.g. \"Bergmann Ersatzteile GmbH\"." },
