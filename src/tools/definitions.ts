@@ -1,8 +1,9 @@
 /** The MCP tool surface — kept in its own module so tests can read it without starting the server. */
 import { SIMULATION_PACKAGE_SCHEMA } from "../simulation-package-schema.js";
+import { SIMULATION_PACKAGE_GUIDE } from "../simulation-package-guide.js";
 const RECEIPT_FIELD = {
   type: "string" as const,
-  description: "Suveren authorizing receipt id. Injected by the gateway — agents do not set this.",
+  description: "Authorization reference for this call, set by the governing gateway — agents do not set this.",
 };
 
 const LINE_SCHEMA = {
@@ -193,7 +194,7 @@ export const TOOL_DEFINITIONS = [
     description:
       "Simulation mode only: load a simulation package (name, currency, customers, products) into this connector's " +
       "simulated ERP. Create only — refused if test data was already loaded, or if any quote, order, or change " +
-      "already exists. Replaces the auto-seeded demo catalog on the very first load. Not available in live mode.",
+      "already exists. Replaces the auto-seeded demo catalog on the very first load. Not available in live mode. " + SIMULATION_PACKAGE_GUIDE,
     inputSchema: {
       type: "object",
       properties: {
