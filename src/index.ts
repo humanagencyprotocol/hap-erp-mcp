@@ -26,7 +26,7 @@ async function main() {
   console.error(`[erp-mcp] mode: ${mode}`);
 
   const server = new Server(
-    { name: "erp", version: "0.3.0" },
+    { name: "erp", version: "0.3.1" },
     { capabilities: { tools: {} } }
   );
 
