@@ -1,6 +1,6 @@
 {
   "name": "@humanagencyp/erp-mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "ERP MCP server for the Human Agency Protocol — quote-to-order: items, customers, quotes, orders",
   "license": "MIT",
   "repository": {
