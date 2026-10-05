@@ -83,7 +83,7 @@ describe("clear_simulation", () => {
     await callTool(db, "simulation", "clear_simulation", { receipt_id: "t-clear" });
     const again = (await callTool(db, "simulation", "load_simulation", { package: pkg, receipt_id: "t-load-2" })) as any;
     expect(again.products_loaded).toBe(pkg.products.length);
-    expect(await db.all(`SELECT tool, receipt_id FROM changes ORDER BY at`)).toEqual([
+    expect(await db.all(`SELECT tool, receipt_id FROM changes ORDER BY at, rowid`)).toEqual([
       { tool: "clear_simulation", receipt_id: "t-clear" },
       { tool: "load_simulation", receipt_id: "t-load-2" },
     ]);
