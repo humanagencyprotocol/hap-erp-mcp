@@ -99,7 +99,7 @@ export const SIMULATION_PACKAGE_SCHEMA = {
               },
               subject: { type: "string", minLength: 1 },
               body: { type: "string", minLength: 1, description: "The request text (a phone call becomes a short written note)." },
-              received_at: { type: "string", description: "Optional ISO date-time the request arrived (default: load time)." },
+              received_at: { type: "string", description: "Ignored — accepted for older packages. Requests are dated within the hour before the load, in case order." },
             },
           },
           reply: {
