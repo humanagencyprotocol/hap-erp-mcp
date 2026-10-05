@@ -17,7 +17,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "os";
 import { join } from "path";
 import { rmSync, writeFileSync } from "fs";
-import { createDb, resolveCompany, DEMO_COMPANY, type Db } from "../src/db.js";
+import { createDb, resolveCompany, type Db } from "../src/db.js";
+import { DEMO_COMPANY } from "./fixtures/demo-company.js";
 import { parseCompany } from "../src/company.js";
 import { getMode, LIVE_NOT_AVAILABLE } from "../src/mode.js";
 import { callTool } from "../src/dispatch.js";
@@ -109,7 +110,7 @@ describe("company file", () => {
   });
 
   it("the shipped example company file is valid", () => {
-    const c = resolveCompany({ ERP_COMPANY_FILE: join(__dirname, "..", "examples", "company.example.json") });
+    const c = resolveCompany({ ERP_COMPANY_FILE: join(__dirname, "..", "examples", "company.example.json") })!;
     expect(c.items.length).toBeGreaterThan(0);
     expect(c.customers.length).toBeGreaterThan(0);
   });
@@ -118,7 +119,16 @@ describe("company file", () => {
     expect(loadScenario(join(__dirname, "..", "examples", "scenario.example.json")).length).toBeGreaterThan(0);
   });
 
-  it("refuses an unreadable file at start rather than falling back to the demo", () => {
+  it("without a company file the ERP starts empty — no demo data", async () => {
+    expect(resolveCompany({})).toBeUndefined();
+    dbPath = tmp("db");
+    process.env.DATABASE_URL = dbPath;
+    db = await createDb();
+    expect(await db.all(`SELECT * FROM items`)).toHaveLength(0);
+    expect(await db.all(`SELECT * FROM customers`)).toHaveLength(0);
+  });
+
+  it("refuses an unreadable file at start rather than starting empty", () => {
     expect(() => resolveCompany({ ERP_COMPANY_FILE: tmp("json") })).toThrow(/cannot be read as JSON/);
   });
 });

@@ -4,7 +4,8 @@
  * doc/engineering.md: the product's value is in what it refuses.
  *
  * - live mode refuses it like every other tool;
- * - the first load replaces the auto-seeded demo catalog;
+ * - a new ERP starts empty; the first load fills it with exactly the package;
+ * - a load on a database that already holds customers or products is refused;
  * - a second load, or a load after any business change, is refused AND
  *   recorded in `refusals` with the gateway's receipt_id — the only trace that
  *   a ticket exists for an action that never happened;
@@ -16,7 +17,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { tmpdir } from "os";
 import { join } from "path";
 import { rmSync, readFileSync } from "fs";
-import { createDb, DEMO_COMPANY, type Db } from "../src/db.js";
+import { createDb, type Db } from "../src/db.js";
+import { DEMO_COMPANY } from "./fixtures/demo-company.js";
 import { parseSimulationPackage, loadCompanyFile } from "../src/company.js";
 import { LIVE_NOT_AVAILABLE } from "../src/mode.js";
 import { callTool } from "../src/dispatch.js";
@@ -29,10 +31,10 @@ const tmp = (ext: string) => join(tmpdir(), `erp-loadsim-${process.pid}-${Date.n
 let dbPath: string;
 let db: Db;
 
-async function freshDb() {
+async function freshDb(company?: typeof DEMO_COMPANY) {
   dbPath = tmp("db");
   process.env.DATABASE_URL = dbPath;
-  db = await createDb(DEMO_COMPANY);
+  db = await createDb(company);
 }
 
 afterEach(async () => {
@@ -67,9 +69,9 @@ describe("live mode", () => {
 });
 
 describe("first load", () => {
-  it("replaces the auto-seeded demo catalog with exactly the package's customers and products", async () => {
+  it("fills the empty ERP with exactly the package's customers and products", async () => {
     await freshDb();
-    expect(await db.all(`SELECT * FROM items`)).toHaveLength(DEMO_COMPANY.items.length); // demo seed present beforehand
+    expect(await db.all(`SELECT * FROM items`)).toHaveLength(0); // no demo data
 
     const result = (await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-load" })) as any;
     expect(result).toMatchObject({ name: PACKAGE.name, customers_loaded: 2, products_loaded: 2 });
@@ -119,8 +121,15 @@ describe("create only — refused, never edited", () => {
     expect(await db.all(`SELECT * FROM customers`)).toHaveLength(2);
   });
 
+  it("refuses a load on a database that already holds customers and products (e.g. from a company file)", async () => {
+    await freshDb(DEMO_COMPANY);
+    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-x" }))
+      .rejects.toThrow(ALREADY_LOADED_MESSAGE);
+    expect(await db.all(`SELECT * FROM items`)).toHaveLength(DEMO_COMPANY.items.length); // untouched
+  });
+
   it("refuses a load after a quote was created (a business change, no prior load_simulation call)", async () => {
-    await freshDb();
+    await freshDb(DEMO_COMPANY);
     const items = await db.all<any>(`SELECT id FROM items LIMIT 1`);
     const customers = await db.all<any>(`SELECT id FROM customers LIMIT 1`);
     await callTool(db, "simulation", "create_quote", {
@@ -131,7 +140,7 @@ describe("create only — refused, never edited", () => {
   });
 
   it("refuses a load after an order exists", async () => {
-    await freshDb();
+    await freshDb(DEMO_COMPANY);
     const item = (await db.all<any>(`SELECT id FROM items LIMIT 1`))[0];
     const customer = (await db.all<any>(`SELECT id FROM customers WHERE credit_limit > 1000 LIMIT 1`))[0];
     const q = (await callTool(db, "simulation", "create_quote", {

@@ -118,29 +118,6 @@ CREATE TABLE IF NOT EXISTS simulation_load (
 /** Tables that carry an authorizing receipt_id (Content Provenance §4.1). */
 const RECEIPT_ID_TABLES = ["quotes", "orders"];
 
-/** Demo company used when no ERP_COMPANY_FILE is given. Deterministic. */
-export const DEMO_COMPANY: Company = {
-  name: "Demo Industrial",
-  currency: "EUR",
-  items: [
-    { id: "item-1", sku: "WIDGET-100", name: "Widget 100", unit: "pcs", list_price: 25.0, stock: 500 },
-    { id: "item-2", sku: "WIDGET-200", name: "Widget 200 Pro", unit: "pcs", list_price: 45.0, stock: 300 },
-    { id: "item-3", sku: "GEAR-A1", name: "Precision Gear A1", unit: "pcs", list_price: 120.0, stock: 80 },
-    { id: "item-4", sku: "GEAR-B2", name: "Precision Gear B2", unit: "pcs", list_price: 150.0, stock: 60 },
-    { id: "item-5", sku: "PANEL-S", name: "Control Panel S", unit: "pcs", list_price: 89.5, stock: 150 },
-    { id: "item-6", sku: "PANEL-L", name: "Control Panel L", unit: "pcs", list_price: 149.5, stock: 90 },
-    { id: "item-7", sku: "CABLE-5M", name: "Cable 5m", unit: "pcs", list_price: 12.0, stock: 1000 },
-    { id: "item-8", sku: "SERVICE-KIT", name: "Maintenance Kit", unit: "set", list_price: 340.0, stock: 20 },
-  ],
-  customers: [
-    { id: "cust-1", name: "Nordkap Manufacturing GmbH", email: "ap@nordkap.example", country: "DE", credit_limit: 50000, open_balance: 12000, payment_terms: "NET30" },
-    { id: "cust-2", name: "Alpine Components AG", email: "finance@alpinecomp.example", country: "AT", credit_limit: 20000, open_balance: 4000, payment_terms: "NET30" },
-    { id: "cust-3", name: "Baltic Retail Group", email: "accounts@balticretail.example", country: "LV", credit_limit: 8000, open_balance: 7500, payment_terms: "NET14" },
-    { id: "cust-4", name: "Meridian Industrial Ltd", email: "payables@meridianind.example", country: "IE", credit_limit: 100000, open_balance: 0, payment_terms: "NET60" },
-    { id: "cust-5", name: "Solstice Equipment Co", email: "finance@solsticeeq.example", country: "NL", credit_limit: 5000, open_balance: 4800, payment_terms: "NET7" },
-  ],
-};
-
 const INSERT_ITEM = `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 const INSERT_CUSTOMER = `INSERT INTO customers (id, name, email, country, currency, credit_limit, open_balance, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 
@@ -153,13 +130,17 @@ function companyRows(company: Company): { items: any[][]; customers: any[][] } {
   };
 }
 
-/** The company to seed from: ERP_COMPANY_FILE if set (refused whole if invalid), else the demo. */
-export function resolveCompany(env: NodeJS.ProcessEnv = process.env): Company {
+/**
+ * The company to seed an empty database from: ERP_COMPANY_FILE if set (refused whole
+ * if invalid). Without it the ERP starts empty — test data comes from load_simulation.
+ */
+export function resolveCompany(env: NodeJS.ProcessEnv = process.env): Company | undefined {
   const path = env.ERP_COMPANY_FILE?.trim();
-  return path ? loadCompanyFile(path) : DEMO_COMPANY;
+  return path ? loadCompanyFile(path) : undefined;
 }
 
-function seedSqlite(db: import("better-sqlite3").Database, company: Company): void {
+function seedSqlite(db: import("better-sqlite3").Database, company: Company | undefined): void {
+  if (!company) return;
   const { count } = db.prepare("SELECT COUNT(*) as count FROM items").get() as { count: number };
   if (count > 0) {
     if (process.env.ERP_COMPANY_FILE) {
@@ -178,7 +159,7 @@ function seedSqlite(db: import("better-sqlite3").Database, company: Company): vo
 }
 
 // SQLite adapter using better-sqlite3 (synchronous API wrapped in async)
-async function createSqliteDb(dbPath: string, company: Company): Promise<Db> {
+async function createSqliteDb(dbPath: string, company: Company | undefined): Promise<Db> {
   const { default: Database } = await import("better-sqlite3");
 
   const db = new Database(dbPath);
@@ -212,7 +193,7 @@ async function createSqliteDb(dbPath: string, company: Company): Promise<Db> {
 }
 
 // Postgres adapter using pg Pool
-async function createPostgresDb(connectionString: string, company: Company): Promise<Db> {
+async function createPostgresDb(connectionString: string, company: Company | undefined): Promise<Db> {
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString });
 
@@ -232,7 +213,7 @@ async function createPostgresDb(connectionString: string, company: Company): Pro
       await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS receipt_id TEXT`);
     }
     const { rows } = await client.query("SELECT COUNT(*)::int as count FROM items");
-    if (rows[0].count === 0) {
+    if (company && rows[0].count === 0) {
       const seed = companyRows(company);
       for (const r of seed.items) await client.query(adaptSql(INSERT_ITEM), r);
       for (const r of seed.customers) await client.query(adaptSql(INSERT_CUSTOMER), r);
@@ -277,7 +258,7 @@ function maybeBackupSqlite(dbPath: string): void {
   }
 }
 
-export async function createDb(company: Company = resolveCompany()): Promise<Db> {
+export async function createDb(company: Company | undefined = resolveCompany()): Promise<Db> {
   const databaseUrl = process.env.DATABASE_URL ?? "";
 
   if (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://")) {

@@ -13,6 +13,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { rmSync } from "fs";
 import { createDb, type Db } from "../src/db.js";
+import { DEMO_COMPANY } from "./fixtures/demo-company.js";
 import { list_items, get_item } from "../src/tools/items.js";
 import { find_customers, get_customer } from "../src/tools/customers.js";
 import { create_quote, update_quote, send_quote, get_quote } from "../src/tools/quotes.js";
@@ -25,7 +26,7 @@ beforeEach(async () => {
   dbPath = join(tmpdir(), `erp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   rmSync(dbPath, { force: true });
   process.env.DATABASE_URL = dbPath;
-  db = await createDb();
+  db = await createDb(DEMO_COMPANY);
 });
 
 afterEach(async () => {
@@ -43,7 +44,7 @@ const CUST_ROOMY = "cust-1"; // plenty of credit
 const CUST_TIGHT = "cust-5"; // credit_limit 5000, open_balance 4800
 
 describe("seed data", () => {
-  it("seeds a deterministic demo dataset on an empty DB", async () => {
+  it("the demo fixture seeds a deterministic dataset", async () => {
     const items = await list_items(db, {});
     const customers = await find_customers(db, {});
     expect(items.length).toBe(8);

@@ -38,8 +38,9 @@ npm run build
 node dist/index.js
 ```
 
-Starts the MCP server with a SQLite database at `~/.hap/erp.db` (seeded with a
-small demo dataset — 8 items, 5 customers — on first run).
+Starts the MCP server with a SQLite database at `~/.hap/erp.db`. A new database
+is empty — load test data with `load_simulation`, or seed it from a company file
+(`ERP_COMPANY_FILE`, see below).
 
 For Postgres:
 
@@ -74,6 +75,15 @@ DATABASE_URL=postgres://user:pass@host:5432/mydb node dist/index.js
 | `convert_quote_to_order` | Convert a sent quote into a confirmed order, reserving stock — sent → order |
 
 Every change tool **requires** `value`, `discount_pct`, and `currency` in its call arguments.
+
+### Test setup (simulation mode only)
+
+| Tool | Description |
+|------|-------------|
+| `load_simulation` | Load a simulation package into the empty ERP — create only |
+| `clear_simulation` | Delete all test data so a new package can be loaded |
+
+These two are not part of the work the agent is tested on; see [Simulation mode](#simulation-mode).
 
 ---
 
@@ -124,8 +134,8 @@ the declared value, and the computed/expected value.
 multiple gateways need shared access.
 
 Schema is created automatically on first start. An empty database is seeded
-from the company file (`ERP_COMPANY_FILE`, see below) or, without one, from a
-deterministic demo dataset.
+from the company file (`ERP_COMPANY_FILE`, see below); without one it stays
+empty. There is no built-in demo data.
 
 ---
 
@@ -156,11 +166,18 @@ argument, in the same flat format the CRM connector and the email simulator
 use (they each read only the parts they need; `contacts` and `cases` are
 accepted and ignored here). Simulation mode only; refused in live mode like
 every other tool. **Create only, never edit** — refused once test data was
-already loaded, or any change, quote, or order exists; the auto-seeded demo
-catalog is the one exception, replaced by the first load. Records the
+already loaded, or any customer, product, change, quote, or order exists. Records the
 package's name and the SHA-256 of its canonical (key-order-independent) JSON
 in `simulation_load`. Example package:
 [`examples/package.example.json`](examples/package.example.json).
+
+**`clear_simulation` (MCP tool).** Deletes all test data — customers, products,
+quotes, orders, and the record of changes, refusals and request hand-overs — so
+the same cases can run again under a different setup, or other cases under the
+same one: clear, then load. Simulation mode only; refused in live mode. The clear
+itself stays recorded as one change with its `receipt_id`; that entry does not
+block the next load. Cannot be undone — take an `export` first if you want to
+keep the record.
 
 **Changes.** Every change the connector performs is recorded as its own entry —
 time, tool, document, status, amount, and the `receipt_id` the gateway injected.

@@ -193,8 +193,8 @@ export const TOOL_DEFINITIONS = [
     name: "load_simulation",
     description:
       "Simulation mode only: load a simulation package (name, currency, customers, products) into this connector's " +
-      "simulated ERP. Create only — refused if test data was already loaded, or if any quote, order, or change " +
-      "already exists. Replaces the auto-seeded demo catalog on the very first load. Not available in live mode. " + SIMULATION_PACKAGE_GUIDE,
+      "simulated ERP. Create only — refused if test data was already loaded, or if any customer, product, quote, " +
+      "order, or change already exists; clear_simulation empties it first. Not available in live mode. " + SIMULATION_PACKAGE_GUIDE,
     inputSchema: {
       type: "object",
       properties: {
@@ -202,6 +202,20 @@ export const TOOL_DEFINITIONS = [
         receipt_id: RECEIPT_FIELD,
       },
       required: ["package"],
+    },
+  },
+  {
+    name: "clear_simulation",
+    description:
+      "Simulation mode only: delete all test data from this connector's simulated ERP — customers, products, quotes, " +
+      "orders, and the record of changes and refusals — so a new package can be loaded with load_simulation. " +
+      "Cannot be undone. Not available in live mode.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        receipt_id: RECEIPT_FIELD,
+      },
+      required: [],
     },
   },
 ] as const;

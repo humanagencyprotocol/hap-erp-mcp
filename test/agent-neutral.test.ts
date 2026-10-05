@@ -2,8 +2,8 @@
  * The agent under test must not be able to tell the simulated ERP from a real
  * one (decision 2026-10-02): realistic measurement; safety comes from the
  * gateway's simulation mode. Nothing a working tool shows — definitions or
- * results — may say "simulated". load_simulation is exempt (the gateway hides it
- * from agents without a setup mandate).
+ * results — may say "simulated". load_simulation and clear_simulation are exempt (the
+ * gateway hides them from agents without a setup mandate).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "os";
@@ -27,7 +27,7 @@ afterEach(async () => { await db.close(); rmSync(dbPath, { force: true }); });
 
 describe("nothing the working agent sees reveals the simulation", () => {
   it("tool names, descriptions and argument descriptions", () => {
-    const working = TOOL_DEFINITIONS.filter((t) => t.name !== "load_simulation");
+    const working = TOOL_DEFINITIONS.filter((t) => t.name !== "load_simulation" && t.name !== "clear_simulation");
     expect(working.length).toBe(12);
     expect(JSON.stringify(working)).not.toMatch(LEAK);
   });
