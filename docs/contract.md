@@ -7,9 +7,49 @@ It is vendor-neutral by design: nothing here names a product, a specific
 governance layer, or a gating mechanism. A caller only needs this document and
 the tool list the server advertises.
 
-## Documents and their life cycle
+## The revision rule
 
-A **quote** moves through a fixed set of statuses:
+This section states the rule independent of what kind of record it applies
+to — it is the same rule for any record type a connector exposes through this
+kind of contract, not something particular to a quote. See *Quotes and the
+revision rule* below for how this connector's one record type (the quote)
+applies it.
+
+A record that can be changed after creation, and that a caller later acts on
+by name (sends it, converts it, commits it — anything beyond reading it),
+carries an integer **revision**, starting at 1:
+
+- **Any change to the record's content creates the next revision.** Creation
+  is revision 1. Every change that succeeds afterward produces the next
+  integer — regardless of whether the change looks material (two different
+  sets of content at the same total, or the same aggregate value, still
+  produce a new revision; the revision tracks the record's actual content,
+  not a derived number like a total).
+- **A revision, once created, never changes.** Its content is frozen the
+  moment the next revision exists. A caller can always retrieve a past
+  revision by number.
+- **An action that acts on the record's content names the revision it acts
+  on.** It takes a `revision` argument and is refused if the record is no
+  longer at that revision. This is what makes a request like "send this" or
+  "convert this" bind to one exact version of the record's content, even if
+  the record changed between the moment the request was made (and perhaps
+  decided on by a person) and the moment it was actually carried out.
+- **A revision mismatch is refused by naming both revisions** — the one the
+  caller declared and the record's actual current one — the same way every
+  other declared-value mismatch is refused in this connector (see *Refusal
+  shape* below). Nothing about the record changes when this refusal happens.
+- **Old revisions are kept.** Nothing a caller can do erases an earlier
+  revision's content.
+
+This follows ordinary optimistic-locking practice (compare-and-refuse on a
+version number) and is not unusual among ERP systems: a release on a business
+document is tied to the document version it was given at the time, and a
+later edit resets it.
+
+## Quotes and the revision rule
+
+This connector's one record type that carries a revision is the **quote**.
+It moves through a fixed set of statuses:
 
 ```
 draft --(send)--> sent --(convert)--> converted
@@ -28,40 +68,15 @@ draft --(send)--> sent --(convert)--> converted
 - **Quotes are cancelled, never deleted.** There is no delete tool for a
   quote, sent or not. A mistaken or abandoned quote is cancelled, not removed
   — the record of what was once offered stays.
-- **Old revisions are kept.** Nothing a caller can do erases an earlier
-  version of a quote's content (see below).
+
+Applying the general rule above: `create_quote` always produces revision 1;
+every successful `update_quote` produces the next revision. `send_quote` and
+`convert_quote_to_order` both require a `revision` argument and are refused,
+naming both revisions, if the quote is no longer at that revision.
 
 An **order** is created once, by converting a sent quote. It has no separate
-revision history: it is a snapshot of the quote at the moment of conversion.
-
-## The revision rule
-
-Every quote carries an integer **revision**, starting at 1.
-
-- **Any change to a quote's content creates the next revision.** Creating a
-  quote is revision 1. Every subsequent `update_quote` call that succeeds
-  produces revision 2, then 3, and so on — regardless of whether the change
-  looks material (different line items at the same total still produce a new
-  revision; the revision tracks the document, not just its total).
-- **A revision, once created, never changes.** Its content — line items,
-  discount, currency, validity date, notes — is frozen the moment the next
-  revision exists. A caller can always retrieve it by number (see
-  `get_quote` below).
-- **Actions that act on a quote's content name the revision they act on.**
-  `send_quote` and `convert_quote_to_order` both require a `revision`
-  argument. The call is refused if the quote is no longer at that revision —
-  this is what makes a request to "send this quote" bind to one exact
-  version of its content, even if the quote changed between the moment the
-  request was made and the moment it was acted on.
-- A revision mismatch is refused the same way every other declared-value
-  mismatch is refused in this connector: naming the field (`revision`), the
-  revision the caller declared, and the quote's actual current revision.
-  Nothing about the quote changes when this refusal happens.
-
-This follows ordinary optimistic-locking practice (compare-and-refuse on a
-version number) and is not unusual among ERP systems: a release on a sales
-document is tied to the document version it was given at the time, and a
-later edit resets it.
+revision history of its own: it is a snapshot of the quote at the moment of
+conversion, and nothing changes it afterward.
 
 ## Tools
 
@@ -106,7 +121,11 @@ passes that number back.
 
 Every refusal in this connector follows one shape: a message naming the
 field, what was declared, and what was expected or actual. For the revision
-rule specifically, the message names both revisions explicitly, for example:
+rule specifically, the message names both revisions explicitly, in the form
+
+> `<Document> <number> is at revision <N>; this request is for revision <M>.`
+
+for example:
 
 > Quote Q-0001 is at revision 2; this request is for revision 1.
 
