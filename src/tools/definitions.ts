@@ -89,6 +89,44 @@ export const TOOL_DEFINITIONS = [
       },
       required: ["id"],
     },
+    outputSchema: {
+      type: "object",
+      title: "Quote",
+      properties: {
+        id: { type: "string", title: "Quote ID" },
+        number: { type: "string", title: "Quote number" },
+        customer_id: { type: "string", title: "Customer ID" },
+        status: {
+          type: "string", title: "Status", enum: ["draft", "sent", "converted", "cancelled"],
+          description: "Where this quote is in its lifecycle. Reflects the quote as it is now, even when `revision` named an earlier version.",
+        },
+        currency: { type: "string", title: "Currency" },
+        discount_pct: { type: "number", title: "Discount (%)" },
+        net_total: { type: "number", title: "Net total" },
+        valid_until: { type: ["string", "null"], title: "Valid until" },
+        notes: { type: ["string", "null"], title: "Notes" },
+        created_at: { type: "string", title: "Created at" },
+        updated_at: { type: "string", title: "Updated at" },
+        sent_at: { type: ["string", "null"], title: "Sent at" },
+        revision: {
+          type: "number", title: "Revision",
+          description: "Integer version of this quote's content. send_quote and convert_quote_to_order must name this exact number.",
+        },
+        lines: {
+          type: "array", title: "Lines",
+          items: {
+            type: "object",
+            properties: {
+              item_id: { type: "string", title: "Item ID" },
+              qty: { type: "number", title: "Quantity" },
+              list_price: { type: "number", title: "List price" },
+              line_total: { type: "number", title: "Line total" },
+            },
+          },
+        },
+      },
+      required: ["id", "number", "status", "currency", "discount_pct", "net_total", "revision", "lines"],
+    },
   },
   {
     name: "list_orders",

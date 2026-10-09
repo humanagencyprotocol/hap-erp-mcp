@@ -23,6 +23,13 @@ against a database already on this version.
 
 See [`docs/contract.md`](docs/contract.md) for the full rule.
 
+`get_quote` additionally declares an MCP `outputSchema` (human, vendor-neutral
+`title`/`description` per field, naming `revision` and `status` as required)
+and its result now carries `structuredContent` alongside the usual text
+content — so `revision`/`status` can be read generically by a caller that
+uses structured tool output, not just by parsing JSON out of a text block.
+Every other tool is unchanged (no outputSchema, no structuredContent).
+
 ## 0.5.0
 
 **BREAKING:** the tool argument `receipt_id` is now `ticket_id` (HAP v0.7
