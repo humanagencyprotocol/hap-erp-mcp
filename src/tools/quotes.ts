@@ -99,7 +99,9 @@ async function quoteWithLines(db: Db, id: string) {
 }
 
 export async function create_quote(db: Db, args: Record<string, any>) {
-  const { customer_id, lines, discount_pct, value, currency, valid_until, notes, receipt_id } = args;
+  // ticket_id: stored on the existing receipt_id column (internal storage
+  // name, unchanged by the v0.7 wire rename of the tool argument).
+  const { customer_id, lines, discount_pct, value, currency, valid_until, notes, ticket_id } = args;
 
   const customer = await requireCustomer(db, customer_id);
   const priced = await priceLines(db, lines);
@@ -120,7 +122,7 @@ export async function create_quote(db: Db, args: Record<string, any>) {
   await db.run(
     `INSERT INTO quotes (id, number, customer_id, status, currency, discount_pct, net_total, valid_until, notes, receipt_id)
      VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`,
-    [id, number, customer_id, currency, discountPct, netTotal, valid_until ?? null, notes ?? null, receipt_id ?? null]
+    [id, number, customer_id, currency, discountPct, netTotal, valid_until ?? null, notes ?? null, ticket_id ?? null]
   );
 
   for (const line of priced) {
@@ -134,7 +136,7 @@ export async function create_quote(db: Db, args: Record<string, any>) {
 }
 
 export async function update_quote(db: Db, args: Record<string, any>) {
-  const { id, lines, discount_pct, value, currency, valid_until, notes, receipt_id } = args;
+  const { id, lines, discount_pct, value, currency, valid_until, notes, ticket_id } = args;
 
   const quote = await requireQuote(db, id);
   if (quote.status !== "draft") {
@@ -165,14 +167,14 @@ export async function update_quote(db: Db, args: Record<string, any>) {
 
   await db.run(
     `UPDATE quotes SET discount_pct = ?, net_total = ?, valid_until = ?, notes = ?, receipt_id = ?, updated_at = datetime('now') WHERE id = ?`,
-    [discountPct, netTotal, valid_until ?? quote.valid_until ?? null, notes ?? quote.notes ?? null, receipt_id ?? quote.receipt_id ?? null, id]
+    [discountPct, netTotal, valid_until ?? quote.valid_until ?? null, notes ?? quote.notes ?? null, ticket_id ?? quote.receipt_id ?? null, id]
   );
 
   return quoteWithLines(db, id);
 }
 
 export async function send_quote(db: Db, args: Record<string, any>) {
-  const { id, value, discount_pct, currency, receipt_id } = args;
+  const { id, value, discount_pct, currency, ticket_id } = args;
 
   const quote = await requireQuote(db, id);
   if (quote.status !== "draft") {
@@ -194,7 +196,7 @@ export async function send_quote(db: Db, args: Record<string, any>) {
 
   await db.run(
     `UPDATE quotes SET status = 'sent', sent_at = datetime('now'), receipt_id = ?, updated_at = datetime('now') WHERE id = ?`,
-    [receipt_id ?? quote.receipt_id ?? null, id]
+    [ticket_id ?? quote.receipt_id ?? null, id]
   );
 
   return quoteWithLines(db, id);

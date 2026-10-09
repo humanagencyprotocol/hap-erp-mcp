@@ -32,7 +32,9 @@ async function orderWithLines(db: Db, id: string) {
 }
 
 export async function convert_quote_to_order(db: Db, args: Record<string, any>) {
-  const { id, value, discount_pct, currency, requested_delivery, receipt_id } = args;
+  // ticket_id: stored on the existing receipt_id column (internal storage
+  // name, unchanged by the v0.7 wire rename of the tool argument).
+  const { id, value, discount_pct, currency, requested_delivery, ticket_id } = args;
 
   const quote = await requireQuote(db, id);
   if (quote.status !== "sent") {
@@ -92,7 +94,7 @@ export async function convert_quote_to_order(db: Db, args: Record<string, any>) 
   await db.run(
     `INSERT INTO orders (id, number, quote_id, customer_id, status, net_total, currency, requested_delivery, receipt_id)
      VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`,
-    [orderId, number, id, quote.customer_id, netTotal, currency, requested_delivery ?? null, receipt_id ?? null]
+    [orderId, number, id, quote.customer_id, netTotal, currency, requested_delivery ?? null, ticket_id ?? null]
   );
 
   await db.run(`UPDATE quotes SET status = 'converted', updated_at = datetime('now') WHERE id = ?`, [id]);

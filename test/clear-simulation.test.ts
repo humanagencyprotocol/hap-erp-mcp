@@ -4,7 +4,7 @@
  *
  * - live mode refuses it like every other tool, deleting nothing;
  * - it deletes every table that holds test data, changes and refusals included;
- * - the clear itself stays recorded as one change with its receipt_id (the trace
+ * - the clear itself stays recorded as one change with its ticket_id (the trace
  *   of its ticket), and that row does not block the next load;
  * - clear → load → work → clear → load runs.
  */
@@ -39,16 +39,16 @@ afterEach(async () => {
 
 /** Load the package, then make one quote → order and one refused call. */
 async function useIt(db: Db) {
-  await callTool(db, "simulation", "load_simulation", { package: pkg, receipt_id: "t-load" });
+  await callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-load" });
   const items = (await callTool(db, "simulation", "list_items", {})) as any[];
   const customers = (await callTool(db, "simulation", "find_customers", {})) as any[];
   const value = Math.round(items[0].list_price * 100) / 100;
   const q = (await callTool(db, "simulation", "create_quote", {
-    customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 1 }], discount_pct: 0, value, currency: pkg.currency, receipt_id: "t-q",
+    customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 1 }], discount_pct: 0, value, currency: pkg.currency, ticket_id: "t-q",
   })) as any;
   await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency });
   await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency });
-  await expect(callTool(db, "simulation", "load_simulation", { package: pkg, receipt_id: "t-refused" })).rejects.toThrow(ALREADY_LOADED_MESSAGE);
+  await expect(callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-refused" })).rejects.toThrow(ALREADY_LOADED_MESSAGE);
   await db.run(`INSERT INTO triggers (scenario_id, request) VALUES ('s1', 'r')`);
 }
 
@@ -58,7 +58,7 @@ describe("clear_simulation", () => {
   it("live mode refuses it and deletes nothing", async () => {
     const db = await freshDb();
     await useIt(db);
-    await expect(callTool(db, "live", "clear_simulation", { receipt_id: "t-clear" })).rejects.toThrow(LIVE_NOT_AVAILABLE);
+    await expect(callTool(db, "live", "clear_simulation", { ticket_id: "t-clear" })).rejects.toThrow(LIVE_NOT_AVAILABLE);
     expect(await count(db, "orders")).toBe(1);
     expect(await count(db, "simulation_load")).toBe(1);
   });
@@ -68,7 +68,7 @@ describe("clear_simulation", () => {
     await useIt(db);
     for (const t of TABLES) expect(await count(db, t), t).toBeGreaterThan(0);
 
-    const result = (await callTool(db, "simulation", "clear_simulation", { receipt_id: "t-clear" })) as any;
+    const result = (await callTool(db, "simulation", "clear_simulation", { ticket_id: "t-clear" })) as any;
     expect(result.cleared).toBe(true);
     expect(result.deleted).toMatchObject({ orders: 1, quotes: 1, simulation_load: 1, refusals: 1 });
 
@@ -80,8 +80,8 @@ describe("clear_simulation", () => {
     const db = await freshDb();
     await callTool(db, "simulation", "clear_simulation", {}); // on an empty ERP: harmless
     await useIt(db);
-    await callTool(db, "simulation", "clear_simulation", { receipt_id: "t-clear" });
-    const again = (await callTool(db, "simulation", "load_simulation", { package: pkg, receipt_id: "t-load-2" })) as any;
+    await callTool(db, "simulation", "clear_simulation", { ticket_id: "t-clear" });
+    const again = (await callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-load-2" })) as any;
     expect(again.products_loaded).toBe(pkg.products.length);
     expect(await db.all(`SELECT tool, receipt_id FROM changes ORDER BY at, rowid`)).toEqual([
       { tool: "clear_simulation", receipt_id: "t-clear" },

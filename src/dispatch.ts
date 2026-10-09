@@ -43,10 +43,11 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
 
 /**
  * Run a tool in the given mode. Every successful change is recorded (`changes`)
- * with the receipt_id the gateway injected; a refused change call is recorded with the
- * receipt_id the gateway injected — that is the trace of a ticket whose action
+ * with the ticket_id the gateway injected; a refused change call is recorded with the
+ * ticket_id the gateway injected — that is the trace of a ticket whose action
  * never happened. In live mode nothing runs and nothing is recorded locally:
- * there is no local system to have refused anything.
+ * there is no local system to have refused anything. Both tables store the id
+ * in their existing receipt_id column (internal storage name, unchanged).
  */
 export async function callTool(db: Db, mode: ErpMode, name: string, args: Record<string, any>): Promise<unknown> {
   if (mode === "live") throw new Error(LIVE_NOT_AVAILABLE);
@@ -57,7 +58,7 @@ export async function callTool(db: Db, mode: ErpMode, name: string, args: Record
       await db.run(
         `INSERT INTO changes (id, at, tool, receipt_id, document_id, document_number, status, net_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          randomUUID(), new Date().toISOString(), name, typeof args.receipt_id === "string" ? args.receipt_id : null,
+          randomUUID(), new Date().toISOString(), name, typeof args.ticket_id === "string" ? args.ticket_id : null,
           doc.id ?? null, doc.number ?? null, doc.status ?? null, typeof doc.net_total === "number" ? doc.net_total : null,
         ],
       );
@@ -66,9 +67,9 @@ export async function callTool(db: Db, mode: ErpMode, name: string, args: Record
   } catch (err) {
     if (CHANGE_TOOLS.has(name)) {
       const message = err instanceof Error ? err.message : String(err);
-      const receiptId = typeof args.receipt_id === "string" ? args.receipt_id : null;
+      const ticketId = typeof args.ticket_id === "string" ? args.ticket_id : null;
       await db.run(`INSERT INTO refusals (id, at, tool, receipt_id, message) VALUES (?, ?, ?, ?, ?)`, [
-        randomUUID(), new Date().toISOString(), name, receiptId, message,
+        randomUUID(), new Date().toISOString(), name, ticketId, message,
       ]);
     }
     throw err;
