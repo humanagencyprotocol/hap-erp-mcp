@@ -65,7 +65,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "list_quotes",
-    description: "List quotes, optionally filtered by status or customer",
+    description: "List quotes, optionally filtered by status or customer. Each result includes its current revision.",
     inputSchema: {
       type: "object",
       properties: {
@@ -78,11 +78,14 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "get_quote",
-    description: "Get a single quote with its lines",
+    description:
+      "Get a single quote with its lines, including its current revision. Pass `revision` to get an earlier " +
+      "revision's content instead (status and timestamps still reflect the quote as it is now).",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "Quote ID" },
+        revision: { type: "number", description: "Optional — return this past revision's content instead of the current one" },
       },
       required: ["id"],
     },
@@ -116,7 +119,8 @@ export const TOOL_DEFINITIONS = [
     name: "create_quote",
     description:
       "Create a draft quote for a customer. The connector recomputes the net total from the lines and the discount " +
-      "and refuses the call if the declared value, discount, or currency does not match.",
+      "and refuses the call if the declared value, discount, or currency does not match. The result's `revision` " +
+      "is always 1 — sending or converting this quote later will require it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -136,7 +140,9 @@ export const TOOL_DEFINITIONS = [
     name: "update_quote",
     description:
       "Update a draft quote (lines, discount, valid_until, notes). Only draft quotes can be updated. The connector " +
-      "recomputes the net total and refuses the call if the declared value, discount, or currency does not match.",
+      "recomputes the net total and refuses the call if the declared value, discount, or currency does not match. " +
+      "Every successful update produces the next revision (the result's `revision` field) — sending or converting " +
+      "this quote will require that new number, not the one it had before this call.",
     inputSchema: {
       type: "object",
       properties: {
@@ -156,7 +162,9 @@ export const TOOL_DEFINITIONS = [
     name: "send_quote",
     description:
       "Send a draft quote to the customer (draft -> sent); records when it was sent. " +
-      "The declared value, discount, and currency must match the quote as stored.",
+      "The declared value, discount, and currency must match the quote as stored. `revision` must match the " +
+      "quote's current revision (from create_quote, update_quote, or get_quote) — refused if the quote was " +
+      "changed since that revision was read, naming both revisions; nothing is sent on a refusal.",
     inputSchema: {
       type: "object",
       properties: {
@@ -164,16 +172,19 @@ export const TOOL_DEFINITIONS = [
         value: { type: "number", description: "Net document total — must match the quote's stored net total" },
         discount_pct: { type: "number", description: "Must match the quote's stored discount — cannot change at send time" },
         currency: { type: "string", description: "Must match the quote's stored currency" },
+        revision: { type: "number", description: "The quote's current revision — refused if the quote has moved on to a later one" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["id", "value", "discount_pct", "currency"],
+      required: ["id", "value", "discount_pct", "currency", "revision"],
     },
   },
   {
     name: "convert_quote_to_order",
     description:
       "Convert a sent quote into a confirmed order (sent -> order). Reserves stock for every line and refuses if the " +
-      "customer's credit limit would be exceeded or any line lacks sufficient stock.",
+      "customer's credit limit would be exceeded or any line lacks sufficient stock. `revision` must match the " +
+      "quote's current revision (from create_quote, update_quote, or get_quote) — refused if the quote was " +
+      "changed since that revision was read, naming both revisions.",
     inputSchema: {
       type: "object",
       properties: {
@@ -181,10 +192,11 @@ export const TOOL_DEFINITIONS = [
         value: { type: "number", description: "Net document total — must match the quote's stored net total" },
         discount_pct: { type: "number", description: "Must match the quote's stored discount — cannot change at conversion time" },
         currency: { type: "string", description: "Must match the quote's stored currency" },
+        revision: { type: "number", description: "The quote's current revision — refused if the quote has moved on to a later one" },
         requested_delivery: { type: "string", description: "Requested delivery date (ISO 8601, optional)" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["id", "value", "discount_pct", "currency"],
+      required: ["id", "value", "discount_pct", "currency", "revision"],
     },
   },
 

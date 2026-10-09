@@ -42,8 +42,8 @@ describe("nothing the working agent sees reveals the simulation", () => {
     const q = (await callTool(db, "simulation", "create_quote", {
       customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 2 }], discount_pct: 0, value, currency: pkg.currency,
     })) as any;
-    out.push(q, await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency }));
-    out.push(await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency }));
+    out.push(q, await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: q.revision }));
+    out.push(await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: q.revision }));
     out.push(await callTool(db, "simulation", "list_quotes", {}), await callTool(db, "simulation", "list_orders", {}));
     expect(JSON.stringify(out)).not.toMatch(LEAK);
   });

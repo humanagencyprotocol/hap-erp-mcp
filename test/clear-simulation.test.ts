@@ -18,7 +18,7 @@ import { callTool } from "../src/dispatch.js";
 import { ALREADY_LOADED_MESSAGE } from "../src/tools/simulation.js";
 
 const pkg = JSON.parse(readFileSync(join(__dirname, "..", "examples", "package.example.json"), "utf8"));
-const TABLES = ["items", "customers", "quotes", "quote_lines", "orders", "refusals", "triggers", "simulation_load"];
+const TABLES = ["items", "customers", "quotes", "quote_lines", "quote_revisions", "orders", "refusals", "triggers", "simulation_load"];
 
 let dbPath = "";
 let db: Db | undefined;
@@ -46,8 +46,8 @@ async function useIt(db: Db) {
   const q = (await callTool(db, "simulation", "create_quote", {
     customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 1 }], discount_pct: 0, value, currency: pkg.currency, ticket_id: "t-q",
   })) as any;
-  await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency });
-  await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency });
+  await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: 1 });
+  await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: 1 });
   await expect(callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-refused" })).rejects.toThrow(ALREADY_LOADED_MESSAGE);
   await db.run(`INSERT INTO triggers (scenario_id, request) VALUES ('s1', 'r')`);
 }

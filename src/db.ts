@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, copyFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { randomUUID } from "crypto";
 import { loadCompanyFile, type Company } from "./company.js";
 
 export interface Db {
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS quotes (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   sent_at TEXT,
-  receipt_id TEXT
+  receipt_id TEXT,
+  revision INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS quote_lines (
@@ -56,6 +58,29 @@ CREATE TABLE IF NOT EXISTS quote_lines (
   list_price REAL NOT NULL,
   line_total REAL NOT NULL
 );
+
+-- One snapshot per quote revision — the content create_quote or update_quote
+-- produced, frozen the moment the NEXT revision exists. send_quote and
+-- convert_quote_to_order name the revision they act on against quotes.revision;
+-- this table is what makes an old revision still readable after that (get_quote
+-- with a revision argument) and what a migration backfills revision 1 from for
+-- a database that predates this table (see RECEIPT_ID_TABLES-style migration below).
+CREATE TABLE IF NOT EXISTS quote_revisions (
+  id TEXT PRIMARY KEY,
+  quote_id TEXT NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  lines TEXT NOT NULL,
+  discount_pct REAL NOT NULL,
+  net_total REAL NOT NULL,
+  currency TEXT NOT NULL,
+  valid_until TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  receipt_id TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS quote_revisions_quote_id_revision
+  ON quote_revisions (quote_id, revision);
 
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY,
@@ -93,7 +118,8 @@ CREATE TABLE IF NOT EXISTS changes (
   document_id TEXT,
   document_number TEXT,
   status TEXT,
-  net_total REAL
+  net_total REAL,
+  revision INTEGER
 );
 
 -- Scenario requests handed to the agent, with the moment they were handed over.
@@ -118,8 +144,70 @@ CREATE TABLE IF NOT EXISTS simulation_load (
 /** Tables that carry an authorizing receipt_id (Content Provenance §4.1). */
 const RECEIPT_ID_TABLES = ["quotes", "orders"];
 
+/**
+ * Columns added to tables that may already exist from before this column was
+ * introduced. `sqliteDdl`/`postgresDdl` are the full `ADD COLUMN` type+default
+ * clause for each backend — kept separate because SQLite and Postgres accept
+ * slightly different syntax for the same default.
+ */
+const ADDED_COLUMNS: Array<{ table: string; column: string; sqliteDdl: string; postgresDdl: string }> = [
+  { table: "quotes", column: "revision", sqliteDdl: "INTEGER NOT NULL DEFAULT 1", postgresDdl: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "changes", column: "revision", sqliteDdl: "INTEGER", postgresDdl: "INTEGER" },
+];
+
 const INSERT_ITEM = `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 const INSERT_CUSTOMER = `INSERT INTO customers (id, name, email, country, currency, credit_limit, open_balance, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+interface QuoteRowForBackfill {
+  id: string;
+  revision: number;
+  discount_pct: number;
+  net_total: number;
+  currency: string;
+  valid_until: string | null;
+  notes: string | null;
+  created_at: string;
+  receipt_id: string | null;
+}
+
+/**
+ * Backfills `quote_revisions` for any quote that does not yet have a snapshot
+ * at its current revision — a database created before this table existed has
+ * quotes but no rows here at all; one created after it exists has them for
+ * every quote going forward. Idempotent: runs on every start, inserts nothing
+ * for a quote that already has its snapshot, so re-running it on an
+ * already-migrated database (or a demo database on a real machine) is a
+ * no-op. Lines are read the same way `loadQuoteLines` reads them elsewhere in
+ * this connector, kept inline here rather than imported to avoid a cycle
+ * between this module and the tools that depend on its `Db` type.
+ */
+async function backfillQuoteRevisions(db: Db): Promise<void> {
+  const quotes = await db.all<QuoteRowForBackfill>("SELECT * FROM quotes");
+  for (const q of quotes) {
+    const existing = await db.get<{ n: number }>(
+      "SELECT COUNT(*) as n FROM quote_revisions WHERE quote_id = ? AND revision = ?",
+      [q.id, q.revision]
+    );
+    if ((existing?.n ?? 0) > 0) continue;
+
+    // Not `ORDER BY rowid` (as `loadQuoteLines` elsewhere in this connector
+    // uses on SQLite) — this runs against Postgres too, which has no rowid.
+    // Order doesn't matter for a backfilled historical snapshot: it is the
+    // same set of lines either way.
+    const lines = await db.all<{ item_id: string; qty: number; list_price: number; line_total: number }>(
+      "SELECT item_id, qty, list_price, line_total FROM quote_lines WHERE quote_id = ? ORDER BY item_id",
+      [q.id]
+    );
+    await db.run(
+      `INSERT INTO quote_revisions (id, quote_id, revision, lines, discount_pct, net_total, currency, valid_until, notes, created_at, receipt_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        randomUUID(), q.id, q.revision, JSON.stringify(lines), q.discount_pct, q.net_total, q.currency,
+        q.valid_until ?? null, q.notes ?? null, q.created_at, q.receipt_id ?? null,
+      ]
+    );
+  }
+}
 
 function companyRows(company: Company): { items: any[][]; customers: any[][] } {
   return {
@@ -175,8 +263,15 @@ async function createSqliteDb(dbPath: string, company: Company | undefined): Pro
       db.exec(`ALTER TABLE ${table} ADD COLUMN receipt_id TEXT`);
     }
   }
+  // Migration: quote revisions (see ADDED_COLUMNS) — same guarded-ALTER pattern.
+  for (const { table, column, sqliteDdl } of ADDED_COLUMNS) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${sqliteDdl}`);
+    }
+  }
 
-  return {
+  const wrapped: Db = {
     async run(sql: string, params: any[] = []): Promise<void> {
       db.prepare(sql).run(...params);
     },
@@ -190,6 +285,8 @@ async function createSqliteDb(dbPath: string, company: Company | undefined): Pro
       db.close();
     },
   };
+  await backfillQuoteRevisions(wrapped);
+  return wrapped;
 }
 
 // Postgres adapter using pg Pool
@@ -212,6 +309,10 @@ async function createPostgresDb(connectionString: string, company: Company | und
     for (const table of RECEIPT_ID_TABLES) {
       await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS receipt_id TEXT`);
     }
+    // Migration: quote revisions (see ADDED_COLUMNS) — same guarded-ALTER pattern.
+    for (const { table, column, postgresDdl } of ADDED_COLUMNS) {
+      await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${postgresDdl}`);
+    }
     const { rows } = await client.query("SELECT COUNT(*)::int as count FROM items");
     if (company && rows[0].count === 0) {
       const seed = companyRows(company);
@@ -222,7 +323,7 @@ async function createPostgresDb(connectionString: string, company: Company | und
     client.release();
   }
 
-  return {
+  const wrapped: Db = {
     async run(sql: string, params: any[] = []): Promise<void> {
       await pool.query(adaptSql(sql), params);
     },
@@ -238,6 +339,8 @@ async function createPostgresDb(connectionString: string, company: Company | und
       await pool.end();
     },
   };
+  await backfillQuoteRevisions(wrapped);
+  return wrapped;
 }
 
 function maybeBackupSqlite(dbPath: string): void {

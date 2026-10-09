@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { Db } from "../db.js";
 import type { Item } from "./items.js";
 import { requireCustomer } from "./customers.js";
-import { requireQuote, loadQuoteLines } from "./quotes.js";
+import { requireQuote, loadQuoteLines, requireCurrentRevision } from "./quotes.js";
 import { computeNetTotal, valuesMatch, refuse, roundToCents } from "../money.js";
 
 export interface OrderRow {
@@ -34,7 +34,7 @@ async function orderWithLines(db: Db, id: string) {
 export async function convert_quote_to_order(db: Db, args: Record<string, any>) {
   // ticket_id: stored on the existing receipt_id column (internal storage
   // name, unchanged by the v0.7 wire rename of the tool argument).
-  const { id, value, discount_pct, currency, requested_delivery, ticket_id } = args;
+  const { id, value, discount_pct, currency, revision, requested_delivery, ticket_id } = args;
 
   const quote = await requireQuote(db, id);
   if (quote.status !== "sent") {
@@ -43,6 +43,8 @@ export async function convert_quote_to_order(db: Db, args: Record<string, any>) 
         (quote.status === "converted" ? " (it already was)" : "")
     );
   }
+
+  requireCurrentRevision(quote, revision);
 
   if (currency !== quote.currency) {
     refuse("currency", currency, quote.currency, `Quote ${quote.number} is in ${quote.currency}.`);

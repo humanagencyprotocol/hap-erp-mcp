@@ -60,8 +60,8 @@ DATABASE_URL=postgres://user:pass@host:5432/mydb node dist/index.js
 | `get_item` | Get an item, including stock and list price |
 | `find_customers` | Search customers by name/email |
 | `get_customer` | Get a customer, including credit limit, open balance, available credit |
-| `list_quotes` | List quotes, filter by status/customer |
-| `get_quote` | Get a quote with its lines |
+| `list_quotes` | List quotes, filter by status/customer — each result includes its current `revision` |
+| `get_quote` | Get a quote with its lines and current `revision`; pass `revision` to read an older version's content instead |
 | `list_orders` | List orders, filter by customer |
 | `get_order` | Get an order with its lines |
 
@@ -69,12 +69,17 @@ DATABASE_URL=postgres://user:pass@host:5432/mydb node dist/index.js
 
 | Tool | Description |
 |------|-------------|
-| `create_quote` | Create a draft quote (customer, lines, discount, value, currency) |
-| `update_quote` | Update a draft quote (lines, discount, value, currency) — draft only |
+| `create_quote` | Create a draft quote (customer, lines, discount, value, currency) — always revision 1 |
+| `update_quote` | Update a draft quote (lines, discount, value, currency) — draft only, produces the next revision |
 | `send_quote` | Mark a draft quote sent (simulated — no email is actually sent) — draft → sent |
 | `convert_quote_to_order` | Convert a sent quote into a confirmed order, reserving stock — sent → order |
 
 Every change tool **requires** `value`, `discount_pct`, and `currency` in its call arguments.
+`send_quote` and `convert_quote_to_order` additionally **require** `revision` — the quote's
+current revision, from `create_quote`, `update_quote`, or `get_quote` — and are refused if the
+quote has moved on to a later one since that revision was read. See
+[Quote revisions](#quote-revisions-an-approval-binds-one-exact-version) below, and
+[`docs/contract.md`](docs/contract.md) for the full, vendor-neutral contract.
 
 ### Test setup (simulation mode only)
 
@@ -118,9 +123,37 @@ So every change tool:
    `sent`).
 6. Refuses unknown `customer_id`/`item_id`, and non-positive or non-integer
    `qty`.
+7. Refuses a `revision` on `send_quote` / `convert_quote_to_order` that does
+   not match the quote's current one (see below).
 
 Every refusal is returned as `isError: true` with a message naming the field,
 the declared value, and the computed/expected value.
+
+---
+
+## Quote revisions — an approval binds one exact version
+
+The same declare-and-recompute principle in the previous section covers a
+quote's total; it does not by itself cover a quote's *content* — nothing
+stopped a draft from being edited (same total, different line items) between
+the moment a human was asked to approve sending it and the moment that
+approval reached this connector. Every quote now carries an integer
+`revision`, starting at 1:
+
+- `create_quote` always produces revision 1.
+- Every successful `update_quote` call produces the next revision —
+  regardless of whether the change looks material; the revision tracks the
+  document's content, not just its net total.
+- `send_quote` and `convert_quote_to_order` **require** a `revision` argument
+  and are refused — naming both revisions, nothing changed — if the quote has
+  moved on to a later one. This is what makes approving "send this quote"
+  bind to one exact version of its content, the same way a SAP release or an
+  optimistic-locking version number does.
+- A revision, once superseded, is frozen forever in `quote_revisions`;
+  `get_quote` accepts an optional `revision` to read it.
+
+See [`docs/contract.md`](docs/contract.md) for the full rule, independent of
+what runs behind this connector.
 
 ---
 

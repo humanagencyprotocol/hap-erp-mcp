@@ -18,6 +18,7 @@ export interface QuoteRow {
   updated_at: string;
   sent_at: string | null;
   receipt_id: string | null;
+  revision: number;
 }
 
 export interface QuoteLineRow extends PricedLine {
@@ -25,6 +26,21 @@ export interface QuoteLineRow extends PricedLine {
   quote_id: string;
   item_id: string;
   line_total: number;
+}
+
+/** A snapshot row from `quote_revisions` — the frozen content of one past revision. */
+interface QuoteRevisionRow {
+  id: string;
+  quote_id: string;
+  revision: number;
+  lines: string; // JSON-encoded PricedInputLine[]
+  discount_pct: number;
+  net_total: number;
+  currency: string;
+  valid_until: string | null;
+  notes: string | null;
+  created_at: string;
+  receipt_id: string | null;
 }
 
 interface LineInput {
@@ -98,6 +114,49 @@ async function quoteWithLines(db: Db, id: string) {
   return { ...quote, lines };
 }
 
+/**
+ * Freezes the quote's current content as a new row in `quote_revisions`.
+ * `priced` may come from `priceLines` (replacement lines) or `loadQuoteLines`
+ * (kept-as-is lines) — normalized to the same four fields either way, so a
+ * snapshot's shape never depends on which call path produced it.
+ */
+async function recordQuoteRevision(
+  db: Db,
+  quoteId: string,
+  revision: number,
+  priced: Array<{ item_id: string; qty: number; list_price: number; line_total: number }>,
+  discountPct: number,
+  netTotal: number,
+  currency: string,
+  validUntil: string | null,
+  notes: string | null,
+  ticketId: string | null
+): Promise<void> {
+  const lines = priced.map(({ item_id, qty, list_price, line_total }) => ({ item_id, qty, list_price, line_total }));
+  await db.run(
+    `INSERT INTO quote_revisions (id, quote_id, revision, lines, discount_pct, net_total, currency, valid_until, notes, receipt_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [uuidv4(), quoteId, revision, JSON.stringify(lines), discountPct, netTotal, currency, validUntil, notes, ticketId]
+  );
+}
+
+/**
+ * Refuses the call when the caller's declared `revision` does not match the
+ * quote's current one — the same refuse() shape every other declared-value
+ * mismatch in this connector uses, naming both revisions explicitly so a
+ * caller can tell whether it is behind or ahead.
+ */
+export function requireCurrentRevision(quote: QuoteRow, declaredRevision: unknown): void {
+  if (declaredRevision !== quote.revision) {
+    refuse(
+      "revision",
+      declaredRevision,
+      quote.revision,
+      `Quote ${quote.number} is at revision ${quote.revision}; this request is for revision ${JSON.stringify(declaredRevision)}.`
+    );
+  }
+}
+
 export async function create_quote(db: Db, args: Record<string, any>) {
   // ticket_id: stored on the existing receipt_id column (internal storage
   // name, unchanged by the v0.7 wire rename of the tool argument).
@@ -120,8 +179,8 @@ export async function create_quote(db: Db, args: Record<string, any>) {
   const number = await nextNumber(db, "quotes", "Q");
 
   await db.run(
-    `INSERT INTO quotes (id, number, customer_id, status, currency, discount_pct, net_total, valid_until, notes, receipt_id)
-     VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO quotes (id, number, customer_id, status, currency, discount_pct, net_total, valid_until, notes, receipt_id, revision)
+     VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, 1)`,
     [id, number, customer_id, currency, discountPct, netTotal, valid_until ?? null, notes ?? null, ticket_id ?? null]
   );
 
@@ -131,6 +190,9 @@ export async function create_quote(db: Db, args: Record<string, any>) {
       [uuidv4(), id, line.item_id, line.qty, line.list_price, line.line_total]
     );
   }
+
+  // create_quote always produces revision 1 — the first snapshot of this document.
+  await recordQuoteRevision(db, id, 1, priced, discountPct, netTotal, currency, valid_until ?? null, notes ?? null, ticket_id ?? null);
 
   return quoteWithLines(db, id);
 }
@@ -165,21 +227,31 @@ export async function update_quote(db: Db, args: Record<string, any>) {
     }
   }
 
+  // Any successful update_quote produces the next revision — even one that
+  // only touches notes/valid_until, and even lines that keep the same total.
+  // The revision tracks the document's content, not just its net value.
+  const nextRevision = quote.revision + 1;
+  const newValidUntil = valid_until ?? quote.valid_until ?? null;
+  const newNotes = notes ?? quote.notes ?? null;
+
   await db.run(
-    `UPDATE quotes SET discount_pct = ?, net_total = ?, valid_until = ?, notes = ?, receipt_id = ?, updated_at = datetime('now') WHERE id = ?`,
-    [discountPct, netTotal, valid_until ?? quote.valid_until ?? null, notes ?? quote.notes ?? null, ticket_id ?? quote.receipt_id ?? null, id]
+    `UPDATE quotes SET discount_pct = ?, net_total = ?, valid_until = ?, notes = ?, receipt_id = ?, revision = ?, updated_at = datetime('now') WHERE id = ?`,
+    [discountPct, netTotal, newValidUntil, newNotes, ticket_id ?? quote.receipt_id ?? null, nextRevision, id]
   );
+  await recordQuoteRevision(db, id, nextRevision, priced, discountPct, netTotal, currency, newValidUntil, newNotes, ticket_id ?? null);
 
   return quoteWithLines(db, id);
 }
 
 export async function send_quote(db: Db, args: Record<string, any>) {
-  const { id, value, discount_pct, currency, ticket_id } = args;
+  const { id, value, discount_pct, currency, revision, ticket_id } = args;
 
   const quote = await requireQuote(db, id);
   if (quote.status !== "draft") {
     throw new Error(`Quote ${quote.number} (${id}) is ${quote.status}; only draft quotes can be sent`);
   }
+
+  requireCurrentRevision(quote, revision);
 
   if (currency !== quote.currency) {
     refuse("currency", currency, quote.currency, `Quote ${quote.number} is in ${quote.currency}.`);
@@ -224,6 +296,31 @@ export async function list_quotes(db: Db, args: Record<string, any>) {
 }
 
 export async function get_quote(db: Db, args: Record<string, any>) {
-  const { id } = args;
-  return quoteWithLines(db, id);
+  const { id, revision } = args;
+  const quote = await requireQuote(db, id);
+
+  if (revision === undefined || revision === quote.revision) {
+    return quoteWithLines(db, id);
+  }
+
+  // An older revision: the current row's status/timestamps apply (a document
+  // has one status regardless of how many content revisions it went through),
+  // but its content comes from the frozen snapshot, not the live columns.
+  const snapshot = await db.get<QuoteRevisionRow>(
+    "SELECT * FROM quote_revisions WHERE quote_id = ? AND revision = ?",
+    [id, revision]
+  );
+  if (!snapshot) {
+    throw new Error(`Unknown revision ${JSON.stringify(revision)} for quote ${quote.number} (${id})`);
+  }
+  return {
+    ...quote,
+    revision: snapshot.revision,
+    discount_pct: snapshot.discount_pct,
+    net_total: snapshot.net_total,
+    currency: snapshot.currency,
+    valid_until: snapshot.valid_until,
+    notes: snapshot.notes,
+    lines: JSON.parse(snapshot.lines),
+  };
 }
