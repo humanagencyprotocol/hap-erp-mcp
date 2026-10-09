@@ -7,7 +7,7 @@
  * - a new ERP starts empty; the first load fills it with exactly the package;
  * - a load on a database that already holds customers or products is refused;
  * - a second load, or a load after any business change, is refused AND
- *   recorded in `refusals` with the gateway's receipt_id — the only trace that
+ *   recorded in `refusals` with the gateway's ticket_id — the only trace that
  *   a ticket exists for an action that never happened;
  * - an invalid package is refused whole, naming the field;
  * - `cases` is accepted but ignored;
@@ -63,7 +63,7 @@ const PACKAGE = {
 describe("live mode", () => {
   it("refuses load_simulation like every other tool, touching nothing", async () => {
     await freshDb();
-    await expect(callTool(db, "live", "load_simulation", { package: PACKAGE, receipt_id: "t-1" })).rejects.toThrow(LIVE_NOT_AVAILABLE);
+    await expect(callTool(db, "live", "load_simulation", { package: PACKAGE, ticket_id: "t-1" })).rejects.toThrow(LIVE_NOT_AVAILABLE);
     expect(await db.all(`SELECT * FROM simulation_load`)).toHaveLength(0);
   });
 });
@@ -73,7 +73,7 @@ describe("first load", () => {
     await freshDb();
     expect(await db.all(`SELECT * FROM items`)).toHaveLength(0); // no demo data
 
-    const result = (await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-load" })) as any;
+    const result = (await callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-load" })) as any;
     expect(result).toMatchObject({ name: PACKAGE.name, customers_loaded: 2, products_loaded: 2 });
     expect(typeof result.package_sha256).toBe("string");
     expect(result.package_sha256).toHaveLength(64);
@@ -84,16 +84,16 @@ describe("first load", () => {
     expect(customers.map((c) => c.name)).toEqual(["Huber Maschinenbau GmbH", "Steiner Anlagentechnik KG"]);
   });
 
-  it("is recorded as a change with the gateway's receipt_id", async () => {
+  it("is recorded as a change with the gateway's ticket_id", async () => {
     await freshDb();
-    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-load" });
+    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-load" });
     const rows = await db.all<any>(`SELECT tool, receipt_id FROM changes`);
     expect(rows).toEqual([{ tool: "load_simulation", receipt_id: "t-load" }]);
   });
 
   it("stores name and sha256 in simulation_load", async () => {
     await freshDb();
-    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-load" });
+    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-load" });
     const rows = await db.all<any>(`SELECT name, package_sha256 FROM simulation_load`);
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe(PACKAGE.name);
@@ -110,10 +110,10 @@ describe("first load", () => {
 });
 
 describe("create only — refused, never edited", () => {
-  it("refuses a second load and records the refusal with receipt_id", async () => {
+  it("refuses a second load and records the refusal with ticket_id", async () => {
     await freshDb();
-    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-first" });
-    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-second" }))
+    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-first" });
+    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-second" }))
       .rejects.toThrow(ALREADY_LOADED_MESSAGE);
     const refusals = await db.all<any>(`SELECT tool, receipt_id FROM refusals`);
     expect(refusals).toEqual([{ tool: "load_simulation", receipt_id: "t-second" }]);
@@ -123,7 +123,7 @@ describe("create only — refused, never edited", () => {
 
   it("refuses a load on a database that already holds customers and products (e.g. from a company file)", async () => {
     await freshDb(DEMO_COMPANY);
-    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-x" }))
+    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-x" }))
       .rejects.toThrow(ALREADY_LOADED_MESSAGE);
     expect(await db.all(`SELECT * FROM items`)).toHaveLength(DEMO_COMPANY.items.length); // untouched
   });
@@ -135,7 +135,7 @@ describe("create only — refused, never edited", () => {
     await callTool(db, "simulation", "create_quote", {
       customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 1 }], discount_pct: 0, value: DEMO_COMPANY.items[0].list_price, currency: "EUR",
     });
-    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-x" }))
+    await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-x" }))
       .rejects.toThrow(ALREADY_LOADED_MESSAGE);
   });
 
@@ -174,7 +174,7 @@ describe("invalid package — refused whole, naming the field", () => {
 
   it("the refusal happens before anything is written", async () => {
     await freshDb();
-    await expect(callTool(db, "simulation", "load_simulation", { package: { name: "X" }, receipt_id: "t-bad" })).rejects.toThrow();
+    await expect(callTool(db, "simulation", "load_simulation", { package: { name: "X" }, ticket_id: "t-bad" })).rejects.toThrow();
     expect(await db.all(`SELECT * FROM simulation_load`)).toHaveLength(0);
     const refusals = await db.all<any>(`SELECT tool, receipt_id FROM refusals`);
     expect(refusals).toEqual([{ tool: "load_simulation", receipt_id: "t-bad" }]);
@@ -236,7 +236,7 @@ describe("the shipped example package is valid", () => {
 describe("export", () => {
   it("includes simulation_load", async () => {
     await freshDb();
-    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, receipt_id: "t-export" });
+    await callTool(db, "simulation", "load_simulation", { package: PACKAGE, ticket_id: "t-export" });
     const rec = await exportRecord(db, "simulation");
     expect(rec.simulation_load).toEqual([expect.objectContaining({ name: PACKAGE.name })]);
   });

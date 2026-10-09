@@ -1,7 +1,7 @@
 /** The MCP tool surface — kept in its own module so tests can read it without starting the server. */
 import { SIMULATION_PACKAGE_SCHEMA } from "../simulation-package-schema.js";
 import { SIMULATION_PACKAGE_GUIDE } from "../simulation-package-guide.js";
-const RECEIPT_FIELD = {
+const TICKET_FIELD = {
   type: "string" as const,
   description: "Authorization reference for this call, set by the governing gateway — agents do not set this.",
 };
@@ -127,7 +127,7 @@ export const TOOL_DEFINITIONS = [
         currency: { type: "string", description: "Document currency — must match the customer's currency" },
         valid_until: { type: "string", description: "ISO 8601 date the quote is valid until (optional)" },
         notes: { type: "string", description: "Free-form notes (optional)" },
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: ["customer_id", "lines", "discount_pct", "value", "currency"],
     },
@@ -147,7 +147,7 @@ export const TOOL_DEFINITIONS = [
         currency: { type: "string", description: "Document currency — must match the quote's currency" },
         valid_until: { type: "string", description: "ISO 8601 date the quote is valid until (optional)" },
         notes: { type: "string", description: "Free-form notes (optional)" },
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: ["id", "discount_pct", "value", "currency"],
     },
@@ -164,7 +164,7 @@ export const TOOL_DEFINITIONS = [
         value: { type: "number", description: "Net document total — must match the quote's stored net total" },
         discount_pct: { type: "number", description: "Must match the quote's stored discount — cannot change at send time" },
         currency: { type: "string", description: "Must match the quote's stored currency" },
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: ["id", "value", "discount_pct", "currency"],
     },
@@ -182,7 +182,7 @@ export const TOOL_DEFINITIONS = [
         discount_pct: { type: "number", description: "Must match the quote's stored discount — cannot change at conversion time" },
         currency: { type: "string", description: "Must match the quote's stored currency" },
         requested_delivery: { type: "string", description: "Requested delivery date (ISO 8601, optional)" },
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: ["id", "value", "discount_pct", "currency"],
     },
@@ -199,7 +199,7 @@ export const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         package: { ...SIMULATION_PACKAGE_SCHEMA, description: `${SIMULATION_PACKAGE_SCHEMA.description} This connector loads \`name\`, \`currency\`, \`customers\` and \`products\` (legacy \`items\` accepted as an alias); \`cases\` and \`contacts\` are used by the email simulator and the CRM.` },
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: ["package"],
     },
@@ -213,7 +213,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object",
       properties: {
-        receipt_id: RECEIPT_FIELD,
+        ticket_id: TICKET_FIELD,
       },
       required: [],
     },

@@ -8,10 +8,10 @@
  *   not be silent;
  * - the company file is loaded whole or refused whole;
  * - a call refused after the gateway let it through is recorded with its
- *   receipt_id — the only trace that a ticket exists for an action that never
+ *   ticket_id — the only trace that a ticket exists for an action that never
  *   happened;
  * - request hand-over times are recorded, and the export lines up
- *   trigger → ticket (receipt_id) → effect.
+ *   trigger → ticket (ticket_id) → effect.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "os";
@@ -61,7 +61,7 @@ describe("mode switch", () => {
   it("live mode refuses every tool, reads included, and changes nothing", async () => {
     await freshDb();
     await expect(callTool(db, "live", "list_items", {})).rejects.toThrow(LIVE_NOT_AVAILABLE);
-    await expect(callTool(db, "live", "create_quote", { ...quote(), receipt_id: "t-1" })).rejects.toThrow(/live mode/);
+    await expect(callTool(db, "live", "create_quote", { ...quote(), ticket_id: "t-1" })).rejects.toThrow(/live mode/);
     expect(await db.all(`SELECT * FROM quotes`)).toHaveLength(0);
     // Nothing local refused it — there is no local system in live mode — so nothing is recorded.
     expect(await db.all(`SELECT * FROM refusals`)).toHaveLength(0);
@@ -136,8 +136,8 @@ describe("company file", () => {
 describe("refusals after the gateway let a call through", () => {
   beforeEach(() => freshDb());
 
-  it("records a false declared value with the ticket's receipt_id", async () => {
-    await expect(callTool(db, "simulation", "create_quote", { ...quote({ value: 20 }), receipt_id: "ticket-20eur" }))
+  it("records a false declared value with the ticket's ticket_id", async () => {
+    await expect(callTool(db, "simulation", "create_quote", { ...quote({ value: 20 }), ticket_id: "ticket-20eur" }))
       .rejects.toThrow(/declared 20, expected 37/);
     const rows = await db.all<any>(`SELECT * FROM refusals`);
     expect(rows).toEqual([expect.objectContaining({ tool: "create_quote", receipt_id: "ticket-20eur" })]);
@@ -146,7 +146,7 @@ describe("refusals after the gateway let a call through", () => {
   });
 
   it("records a wrong state transition too (send of an unknown quote)", async () => {
-    await expect(callTool(db, "simulation", "send_quote", { id: "nope", value: 1, discount_pct: 0, currency: "EUR", receipt_id: "t-x" }))
+    await expect(callTool(db, "simulation", "send_quote", { id: "nope", value: 1, discount_pct: 0, currency: "EUR", ticket_id: "t-x" }))
       .rejects.toThrow();
     expect(await db.all<any>(`SELECT receipt_id FROM refusals`)).toEqual([{ receipt_id: "t-x" }]);
   });
@@ -157,7 +157,7 @@ describe("refusals after the gateway let a call through", () => {
   });
 
   it("records a successful change as a change, not a refusal", async () => {
-    await callTool(db, "simulation", "create_quote", { ...quote(), receipt_id: "t-ok" });
+    await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-ok" });
     expect(await db.all(`SELECT * FROM refusals`)).toHaveLength(0);
     expect(await db.all<any>(`SELECT tool, receipt_id, document_number, status, net_total FROM changes`)).toEqual([
       { tool: "create_quote", receipt_id: "t-ok", document_number: "Q-0001", status: "draft", net_total: 37 },
@@ -167,8 +167,8 @@ describe("refusals after the gateway let a call through", () => {
   it("keeps one change per ticket even when several tickets act on the same document", async () => {
     // The quote row only holds its latest receipt_id (send overwrites create). The
     // change record must still show both tickets — otherwise create's ticket has no trace.
-    const q = (await callTool(db, "simulation", "create_quote", { ...quote(), receipt_id: "t-create" })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", receipt_id: "t-send" });
+    const q = (await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-create" })) as any;
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send" });
     expect((await db.get<any>(`SELECT receipt_id FROM quotes WHERE id = ?`, [q.id]))!.receipt_id).toBe("t-send");
     expect((await db.all<any>(`SELECT receipt_id, status FROM changes ORDER BY at`))).toEqual([
       { receipt_id: "t-create", status: "draft" },
@@ -179,6 +179,12 @@ describe("refusals after the gateway let a call through", () => {
   it("records no change for a read", async () => {
     await callTool(db, "simulation", "list_items", {});
     expect(await db.all(`SELECT * FROM changes`)).toHaveLength(0);
+  });
+
+  it("records the ticket_id argument from a call (v0.7 wire rename — stored in the receipt_id column)", async () => {
+    await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-wire" });
+    const rows = await db.all<any>(`SELECT receipt_id FROM changes WHERE tool = 'create_quote'`);
+    expect(rows).toEqual([{ receipt_id: "t-wire" }]);
   });
 });
 
@@ -208,11 +214,11 @@ describe("scenario and export", () => {
     expect(() => loadScenario(path)).toThrow(/appears twice/);
   });
 
-  it("the export lines up trigger → receipt_id → effect, and states the mode", async () => {
+  it("the export lines up trigger → ticket_id → effect, and states the mode", async () => {
     await nextRequest(db, loadScenario(scenarioFile()));
-    const q = (await callTool(db, "simulation", "create_quote", { ...quote(), receipt_id: "t-quote" })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", receipt_id: "t-send" });
-    await callTool(db, "simulation", "create_quote", { ...quote({ value: 20 }), receipt_id: "t-false" }).catch(() => {});
+    const q = (await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-quote" })) as any;
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send" });
+    await callTool(db, "simulation", "create_quote", { ...quote({ value: 20 }), ticket_id: "t-false" }).catch(() => {});
 
     const rec = await exportRecord(db, "simulation");
     expect(rec.mode).toBe("simulation");

@@ -175,19 +175,19 @@ in `simulation_load`. Example package:
 quotes, orders, and the record of changes, refusals and request hand-overs — so
 the same cases can run again under a different setup, or other cases under the
 same one: clear, then load. Simulation mode only; refused in live mode. The clear
-itself stays recorded as one change with its `receipt_id`; that entry does not
+itself stays recorded as one change with its `ticket_id`; that entry does not
 block the next load. Cannot be undone — take an `export` first if you want to
 keep the record.
 
 **Changes.** Every change the connector performs is recorded as its own entry —
-time, tool, document, status, amount, and the `receipt_id` the gateway injected.
-A document only keeps its latest `receipt_id` (sending a quote replaces the one
+time, tool, document, status, amount, and the `ticket_id` the gateway injected.
+A document only keeps its latest `ticket_id` (sending a quote replaces the one
 from creating it), so this record, not the document, lines up ticket and effect
 one to one.
 
 **Refusals after the gateway.** When the connector refuses a change call the
 gateway already let through (false declared value, credit limit, stock, wrong
-state), it records the refusal with the `receipt_id` the gateway injected. A
+state), it records the refusal with the `ticket_id` the gateway injected. A
 ticket then exists for an action that never happened, and this record is the
 only place that says so.
 
@@ -202,8 +202,8 @@ HAP_DATA_DIR=~/.suveren erp-mcp export > record.json                          # 
 ```
 
 The export lines up **trigger → ticket → effect**: each request's hand-over time,
-each change with the `receipt_id` of the ticket that authorised it, and each
-refusal with the `receipt_id` of the ticket whose action did not happen.
+each change with the `ticket_id` of the ticket that authorised it, and each
+refusal with the `ticket_id` of the ticket whose action did not happen.
 
 ---
 
