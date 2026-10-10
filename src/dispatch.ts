@@ -56,10 +56,11 @@ export async function callTool(db: Db, mode: ErpMode, name: string, args: Record
     if (CHANGE_TOOLS.has(name)) {
       const doc = (result ?? {}) as Record<string, unknown>;
       await db.run(
-        `INSERT INTO changes (id, at, tool, receipt_id, document_id, document_number, status, net_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO changes (id, at, tool, receipt_id, document_id, document_number, status, net_total, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           randomUUID(), new Date().toISOString(), name, typeof args.ticket_id === "string" ? args.ticket_id : null,
           doc.id ?? null, doc.number ?? null, doc.status ?? null, typeof doc.net_total === "number" ? doc.net_total : null,
+          typeof doc.revision === "number" ? doc.revision : null,
         ],
       );
     }

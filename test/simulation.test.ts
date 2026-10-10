@@ -92,10 +92,10 @@ describe("company file", () => {
     const q = (await callTool(db, "simulation", "create_quote", {
       customer_id: "cust-1", lines: [{ item_id: "item-1", qty: 40 }], discount_pct: 0, value: 3380, currency: "EUR",
     })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: 3380, discount_pct: 0, currency: "EUR" });
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 3380, discount_pct: 0, currency: "EUR", revision: 1 });
     // 2,000 open + 3,380 is within 15,000 — so drop the limit to prove the check reads the seeded row.
     await db.run(`UPDATE customers SET credit_limit = 4000 WHERE id = 'cust-1'`);
-    await expect(callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value: 3380, discount_pct: 0, currency: "EUR" }))
+    await expect(callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value: 3380, discount_pct: 0, currency: "EUR", revision: 1 }))
       .rejects.toThrow(/credit/i);
   });
 
@@ -168,7 +168,7 @@ describe("refusals after the gateway let a call through", () => {
     // The quote row only holds its latest receipt_id (send overwrites create). The
     // change record must still show both tickets — otherwise create's ticket has no trace.
     const q = (await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-create" })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send" });
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send", revision: 1 });
     expect((await db.get<any>(`SELECT receipt_id FROM quotes WHERE id = ?`, [q.id]))!.receipt_id).toBe("t-send");
     expect((await db.all<any>(`SELECT receipt_id, status FROM changes ORDER BY at`))).toEqual([
       { receipt_id: "t-create", status: "draft" },
@@ -217,7 +217,7 @@ describe("scenario and export", () => {
   it("the export lines up trigger → ticket_id → effect, and states the mode", async () => {
     await nextRequest(db, loadScenario(scenarioFile()));
     const q = (await callTool(db, "simulation", "create_quote", { ...quote(), ticket_id: "t-quote" })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send" });
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: 37, discount_pct: 0, currency: "EUR", ticket_id: "t-send", revision: 1 });
     await callTool(db, "simulation", "create_quote", { ...quote({ value: 20 }), ticket_id: "t-false" }).catch(() => {});
 
     const rec = await exportRecord(db, "simulation");

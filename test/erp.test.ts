@@ -16,7 +16,7 @@ import { createDb, type Db } from "../src/db.js";
 import { DEMO_COMPANY } from "./fixtures/demo-company.js";
 import { list_items, get_item } from "../src/tools/items.js";
 import { find_customers, get_customer } from "../src/tools/customers.js";
-import { create_quote, update_quote, send_quote, get_quote } from "../src/tools/quotes.js";
+import { create_quote, update_quote, send_quote, get_quote, list_quotes } from "../src/tools/quotes.js";
 import { convert_quote_to_order, get_order } from "../src/tools/orders.js";
 
 let dbPath: string;
@@ -221,7 +221,7 @@ describe("update_quote — state machine: only drafts can be updated", () => {
       value: 25,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "EUR" });
 
     const result = await update_quote(db, {
       id: quote.id,
@@ -263,9 +263,9 @@ describe("send_quote — state machine and frozen discount", () => {
       value: 25,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "EUR" });
 
-    const result = await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR" }).catch(
+    const result = await send_quote(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "EUR" }).catch(
       (e) => e
     );
     expect(result).toBeInstanceOf(Error);
@@ -283,7 +283,7 @@ describe("send_quote — state machine and frozen discount", () => {
 
     // Caller tries to sneak in a bigger discount at send time than what was
     // quoted — this must not silently take effect.
-    const result = await send_quote(db, { id: quote.id, value: 80, discount_pct: 20, currency: "EUR" }).catch(
+    const result = await send_quote(db, { id: quote.id, revision: quote.revision, value: 80, discount_pct: 20, currency: "EUR" }).catch(
       (e) => e
     );
     expect(result).toBeInstanceOf(Error);
@@ -299,7 +299,7 @@ describe("send_quote — state machine and frozen discount", () => {
       currency: "EUR",
     });
 
-    const result = await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "USD" }).catch(
+    const result = await send_quote(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "USD" }).catch(
       (e) => e
     );
     expect(result).toBeInstanceOf(Error);
@@ -319,6 +319,7 @@ describe("convert_quote_to_order — state machine", () => {
 
     const result = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 25,
       discount_pct: 0,
       currency: "EUR",
@@ -335,11 +336,12 @@ describe("convert_quote_to_order — state machine", () => {
       value: 25,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR" });
-    await convert_quote_to_order(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "EUR" });
+    await convert_quote_to_order(db, { id: quote.id, revision: quote.revision, value: 25, discount_pct: 0, currency: "EUR" });
 
     const result = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 25,
       discount_pct: 0,
       currency: "EUR",
@@ -359,10 +361,11 @@ describe("convert_quote_to_order — credit limit", () => {
       value: 450,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 450, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 450, discount_pct: 0, currency: "EUR" });
 
     const result = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 450,
       discount_pct: 0,
       currency: "EUR",
@@ -381,10 +384,11 @@ describe("convert_quote_to_order — credit limit", () => {
       value: 100,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 100, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 100, discount_pct: 0, currency: "EUR" });
 
     const order = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 100,
       discount_pct: 0,
       currency: "EUR",
@@ -401,8 +405,8 @@ describe("convert_quote_to_order — credit limit", () => {
       value: 450,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 450, discount_pct: 0, currency: "EUR" });
-    await convert_quote_to_order(db, { id: quote.id, value: 450, discount_pct: 0, currency: "EUR" }).catch(
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 450, discount_pct: 0, currency: "EUR" });
+    await convert_quote_to_order(db, { id: quote.id, revision: quote.revision, value: 450, discount_pct: 0, currency: "EUR" }).catch(
       (e) => e
     );
 
@@ -421,10 +425,11 @@ describe("convert_quote_to_order — stock", () => {
       value: 150 * 61,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 150 * 61, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 150 * 61, discount_pct: 0, currency: "EUR" });
 
     const result = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 150 * 61,
       discount_pct: 0,
       currency: "EUR",
@@ -445,11 +450,12 @@ describe("convert_quote_to_order — stock", () => {
       value: 25 * 5 + 150 * 61,
       currency: "EUR",
     });
-    await send_quote(db, { id: quote.id, value: 25 * 5 + 150 * 61, discount_pct: 0, currency: "EUR" });
+    await send_quote(db, { id: quote.id, revision: quote.revision, value: 25 * 5 + 150 * 61, discount_pct: 0, currency: "EUR" });
 
     const widgetBefore = await get_item(db, { id: ITEM_100 });
     const result = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 25 * 5 + 150 * 61,
       discount_pct: 0,
       currency: "EUR",
@@ -476,12 +482,13 @@ describe("happy path — quote -> send -> convert reserves stock", () => {
     expect(quote.status).toBe("draft");
     expect(quote.net_total).toBe(125);
 
-    const sent = await send_quote(db, { id: quote.id, value: 125, discount_pct: 0, currency: "EUR" });
+    const sent = await send_quote(db, { id: quote.id, revision: quote.revision, value: 125, discount_pct: 0, currency: "EUR" });
     expect(sent.status).toBe("sent");
     expect(sent.sent_at).toBeTruthy();
 
     const order = await convert_quote_to_order(db, {
       id: quote.id,
+      revision: quote.revision,
       value: 125,
       discount_pct: 0,
       currency: "EUR",
@@ -500,6 +507,256 @@ describe("happy path — quote -> send -> convert reserves stock", () => {
 
     const orderBack = await get_order(db, { id: order.id });
     expect(orderBack.number).toMatch(/^O-\d{4}$/);
+  });
+});
+
+describe("quote revisions — an approval binds one exact version", () => {
+  it("create_quote always produces revision 1", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    expect(quote.revision).toBe(1);
+  });
+
+  it("update_quote always produces the next revision", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }], // 25.00
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    expect(quote.revision).toBe(1);
+
+    const updated = await update_quote(db, {
+      id: quote.id,
+      lines: [{ item_id: ITEM_200, qty: 1 }], // 45.00 — a different line item entirely
+      discount_pct: 0,
+      value: 45,
+      currency: "EUR",
+    });
+    expect(updated.revision).toBe(2);
+    expect(updated.net_total).toBe(45);
+
+    const updatedAgain = await update_quote(db, {
+      id: quote.id,
+      discount_pct: 0,
+      value: 45,
+      currency: "EUR",
+      notes: "a third version, lines unchanged",
+    });
+    expect(updatedAgain.revision).toBe(3);
+  });
+
+  it("update_quote bumps the revision even when only notes change (lines and discount untouched)", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+
+    const updated = await update_quote(db, {
+      id: quote.id,
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+      notes: "call before delivery",
+    });
+    expect(updated.revision).toBe(2);
+    expect(updated.lines).toHaveLength(1); // lines carried over unchanged
+  });
+
+  it("send_quote refuses a stale revision, naming both revisions — nothing changes", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }], // 25.00
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    expect(quote.revision).toBe(1);
+
+    await update_quote(db, {
+      id: quote.id,
+      lines: [{ item_id: ITEM_200, qty: 1 }], // 45.00, different item than revision 1
+      discount_pct: 0,
+      value: 45,
+      currency: "EUR",
+    });
+
+    const result = await send_quote(db, {
+      id: quote.id,
+      value: 25,
+      discount_pct: 0,
+      currency: "EUR",
+      revision: 1, // stale — the quote is now at revision 2
+    }).catch((e) => e);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/revision/);
+    expect((result as Error).message).toContain(`${quote.number} is at revision 2`);
+    expect((result as Error).message).toContain("this request is for revision 1");
+
+    const stillDraft = await get_quote(db, { id: quote.id });
+    expect(stillDraft.status).toBe("draft");
+    expect(stillDraft.sent_at).toBeNull();
+  });
+
+  it("send_quote succeeds once the caller names the quote's current revision", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    const updated = await update_quote(db, {
+      id: quote.id,
+      lines: [{ item_id: ITEM_200, qty: 1 }], // 45.00
+      discount_pct: 0,
+      value: 45,
+      currency: "EUR",
+    });
+    expect(updated.revision).toBe(2);
+
+    const sent = await send_quote(db, { id: quote.id, value: 45, discount_pct: 0, currency: "EUR", revision: 2 });
+    expect(sent.status).toBe("sent");
+    expect(sent.revision).toBe(2);
+  });
+
+  it("the race: create (rev 1) -> update (rev 2, same total, different lines) -> send(revision:1) refused, send(revision:2) works", async () => {
+    // 1 x WIDGET-100 (25.00) vs 1 x WIDGET-200 Pro (45.00) is NOT the same
+    // total, so pick a discount that lands revision 2 on the same net total
+    // as revision 1 — the scenario the brief names explicitly: same total,
+    // different items, so a value-only check could not have caught it.
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }], // 25.00, 0% discount
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    expect(quote.revision).toBe(1);
+
+    const updated = await update_quote(db, {
+      id: quote.id,
+      lines: [{ item_id: ITEM_200, qty: 1 }], // 45.00 gross
+      discount_pct: 44.444444444444, // 45 * (1 - 0.44444444444) = 25.00
+      value: 25,
+      currency: "EUR",
+    });
+    expect(updated.revision).toBe(2);
+    expect(updated.net_total).toBe(25); // same total as revision 1 — a value-only guard would miss this
+
+    const refused = await send_quote(db, {
+      id: quote.id, value: 25, discount_pct: 44.444444444444, currency: "EUR", revision: 1,
+    }).catch((e) => e);
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toMatch(/revision/);
+
+    const afterRefusal = await get_quote(db, { id: quote.id });
+    expect(afterRefusal.status).toBe("draft"); // still draft — nothing was sent
+    expect(afterRefusal.revision).toBe(2);
+
+    const sent = await send_quote(db, {
+      id: quote.id, value: 25, discount_pct: 44.444444444444, currency: "EUR", revision: 2,
+    });
+    expect(sent.status).toBe("sent");
+  });
+
+  it("convert_quote_to_order refuses a stale revision the same way send_quote does", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    const sent = await send_quote(db, { id: quote.id, value: 25, discount_pct: 0, currency: "EUR", revision: quote.revision });
+    expect(sent.revision).toBe(1);
+
+    // Pass a stale revision at conversion time — the quote's revision is frozen
+    // at 1 once sent (no update_quote reaches a sent quote), so this exercises
+    // the same refuse() path with a declared revision that never existed as current.
+    const result = await convert_quote_to_order(db, {
+      id: quote.id, value: 25, discount_pct: 0, currency: "EUR", revision: 99,
+    }).catch((e) => e);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/revision/);
+    expect((result as Error).message).toContain("this request is for revision 99");
+
+    const stillSent = await get_quote(db, { id: quote.id });
+    expect(stillSent.status).toBe("sent"); // not converted
+  });
+
+  it("get_quote with a revision argument returns that exact historical version, not the current one", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }], // 25.00
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+      notes: "first draft",
+    });
+    await update_quote(db, {
+      id: quote.id,
+      lines: [{ item_id: ITEM_200, qty: 1 }], // 45.00
+      discount_pct: 0,
+      value: 45,
+      currency: "EUR",
+      notes: "revised draft",
+    });
+
+    const rev1 = await get_quote(db, { id: quote.id, revision: 1 });
+    expect(rev1.revision).toBe(1);
+    expect(rev1.net_total).toBe(25);
+    expect(rev1.notes).toBe("first draft");
+    expect(rev1.lines).toEqual([expect.objectContaining({ item_id: ITEM_100, qty: 1 })]);
+    expect(rev1.status).toBe("draft"); // status is the document's, not the revision's
+
+    const current = await get_quote(db, { id: quote.id });
+    expect(current.revision).toBe(2);
+    expect(current.net_total).toBe(45);
+
+    const explicitCurrent = await get_quote(db, { id: quote.id, revision: 2 });
+    expect(explicitCurrent.net_total).toBe(45);
+    expect(explicitCurrent.notes).toBe("revised draft");
+  });
+
+  it("get_quote refuses an unknown revision number", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    const result = await get_quote(db, { id: quote.id, revision: 7 }).catch((e) => e);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/Unknown revision/);
+  });
+
+  it("list_quotes and create_quote/update_quote results all carry the revision", async () => {
+    const quote = await create_quote(db, {
+      customer_id: CUST_ROOMY,
+      lines: [{ item_id: ITEM_100, qty: 1 }],
+      discount_pct: 0,
+      value: 25,
+      currency: "EUR",
+    });
+    expect(quote.revision).toBe(1);
+    const updated = await update_quote(db, {
+      id: quote.id, discount_pct: 0, value: 25, currency: "EUR", notes: "x",
+    });
+    expect(updated.revision).toBe(2);
+
+    const listed = await list_quotes(db, { customer_id: CUST_ROOMY });
+    expect(listed.find((q) => q.id === quote.id)?.revision).toBe(2);
   });
 });
 

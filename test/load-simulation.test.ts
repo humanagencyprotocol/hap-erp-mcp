@@ -146,8 +146,8 @@ describe("create only — refused, never edited", () => {
     const q = (await callTool(db, "simulation", "create_quote", {
       customer_id: customer.id, lines: [{ item_id: item.id, qty: 1 }], discount_pct: 0, value: DEMO_COMPANY.items[0].list_price, currency: "EUR",
     })) as any;
-    await callTool(db, "simulation", "send_quote", { id: q.id, value: q.net_total, discount_pct: 0, currency: "EUR" });
-    await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value: q.net_total, discount_pct: 0, currency: "EUR" });
+    await callTool(db, "simulation", "send_quote", { id: q.id, value: q.net_total, discount_pct: 0, currency: "EUR", revision: 1 });
+    await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value: q.net_total, discount_pct: 0, currency: "EUR", revision: 1 });
     await expect(callTool(db, "simulation", "load_simulation", { package: PACKAGE })).rejects.toThrow(ALREADY_LOADED_MESSAGE);
   });
 

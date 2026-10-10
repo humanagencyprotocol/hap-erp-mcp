@@ -32,7 +32,7 @@ async function assertLoadable(db: Db): Promise<void> {
 
 /** Every table that holds test data, in an order the foreign keys allow deleting. */
 const CLEAR_ORDER = [
-  "quote_lines", "orders", "quotes", "items", "customers",
+  "quote_lines", "quote_revisions", "orders", "quotes", "items", "customers",
   "changes", "refusals", "triggers", "simulation_load",
 ] as const;
 
