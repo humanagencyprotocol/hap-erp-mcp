@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-10
 
 **BREAKING:** quote revisions. Every quote carries an integer `revision`,
 starting at 1; `create_quote` always produces revision 1, and every
