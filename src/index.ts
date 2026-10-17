@@ -9,21 +9,27 @@ import {
 
 import { createDb } from "./db.js";
 import { callTool } from "./dispatch.js";
-import { getMode } from "./mode.js";
+import { getMode, getLiveAdapter } from "./mode.js";
 import { runCli } from "./cli.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
+import { LOCAL_TOOL_DEFINITIONS } from "./live/local/definitions.js";
+import { createLocalDb, resolveLocalDbPath } from "./live/local/db.js";
 
 
 
 async function main() {
-  // `erp-mcp export` / `erp-mcp scenario …` are local operator commands, not MCP tools.
+  // `erp-mcp export` / `erp-mcp scenario …` / `erp-mcp customers …` are local
+  // operator commands, not MCP tools.
   if (process.argv.length > 2) {
     process.exit(await runCli(process.argv.slice(2)));
   }
 
   const mode = getMode();
-  const db = await createDb();
-  console.error(`[erp-mcp] mode: ${mode}`);
+  const adapter = mode === "live" ? getLiveAdapter() : undefined;
+  const usingLocalAdapter = mode === "live" && adapter === "local";
+
+  const db = usingLocalAdapter ? await createLocalDb(resolveLocalDbPath()) : await createDb();
+  console.error(`[erp-mcp] mode: ${mode}${adapter ? ` (adapter: ${adapter})` : ""}`);
 
   const server = new Server(
     { name: "erp", version: "0.3.3" },
@@ -31,7 +37,7 @@ async function main() {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: TOOL_DEFINITIONS };
+    return { tools: usingLocalAdapter ? LOCAL_TOOL_DEFINITIONS : TOOL_DEFINITIONS };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

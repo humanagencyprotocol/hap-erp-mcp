@@ -1,0 +1,69 @@
+{
+  "template": "rechnung-de",
+  "version": "1",
+  "language": "de-AT",
+  "documents": ["invoice", "credit_note"],
+  "page": { "size": "A4", "margins_mm": [18, 18, 20, 18], "font": "Helvetica", "font_size": 10 },
+  "texts": {
+    "title.invoice": "Rechnung",
+    "title.credit_note": "Gutschrift (Storno) zu Rechnung {{gutschrift.zu_rechnung.nummer}}",
+    "label.number.invoice": "Rechnungsnummer",
+    "label.number.credit_note": "Gutschriftnummer",
+    "label.date": "Datum",
+    "label.period": "Leistungszeitraum",
+    "label.customer_uid": "Ihre UID",
+    "label.own_uid": "Unsere UID",
+    "label.for_invoice": "Zu Rechnung",
+    "col.pos": "Pos.", "col.description": "Leistung", "col.qty": "Menge",
+    "col.unit_price": "Einzelpreis netto", "col.total": "Gesamt netto",
+    "sum.net": "Summe netto", "sum.vat": "USt {{steuer.satz}} %", "sum.vat_none": "USt",
+    "sum.gross.invoice": "Rechnungsbetrag", "sum.gross.credit_note": "Gutschriftsbetrag",
+    "intro.invoice": "Wir verrechnen vereinbarungsgemäß:",
+    "intro.credit_note": "Wir stornieren die Rechnung {{gutschrift.zu_rechnung.nummer}} vom {{gutschrift.zu_rechnung.datum}}:",
+    "note.reverse_charge": "Übergang der Steuerschuld auf den Leistungsempfänger (Reverse Charge). Die Leistung ist in Österreich nicht steuerbar; die Umsatzsteuer schuldet der Leistungsempfänger.",
+    "note.small_business": "Umsatzsteuerbefreit – Kleinunternehmer gem. § 6 Abs. 1 Z 27 UStG.",
+    "payment.invoice": "Zahlbar ohne Abzug bis {{rechnung.faellig}} ({{rechnung.zahlungsziel_tage}} Tage) auf das unten angeführte Konto, Verwendungszweck: {{rechnung.nummer}}.",
+    "payment.link": "Oder bequem online bezahlen: {{zahlung.link}}",
+    "payment.credit_note": "Der Betrag wird mit offenen Forderungen verrechnet bzw. auf Ihr Konto überwiesen."
+  },
+  "blocks": [
+    { "type": "letterhead", "left": ["{{firma.name}}", "{{firma.inhaber}} · {{firma.adresse.einzeilig}}"], "right": ["{{firma.email}}", "{{firma.web}}"] },
+    { "type": "sender_line", "text": "{{firma.inhaber}} · {{firma.adresse.einzeilig}}" },
+    { "type": "address_and_meta",
+      "address": "{{kunde.adresse.mehrzeilig}}",
+      "meta": [
+        ["label.number.{{dokument.art}}", "{{dokument.nummer}}"],
+        ["label.date", "{{dokument.datum}}"],
+        ["label.period", "{{leistung.zeitraum}}"],
+        { "when": "dokument.art == 'credit_note'", "row": ["label.for_invoice", "{{gutschrift.zu_rechnung.nummer}} vom {{gutschrift.zu_rechnung.datum}}"] },
+        { "when": "kunde.uid", "row": ["label.customer_uid", "{{kunde.uid}}"] },
+        ["label.own_uid", "{{firma.uid}}"]
+      ] },
+    { "type": "heading", "text": "title.{{dokument.art}}" },
+    { "type": "paragraph", "text": "intro.{{dokument.art}}" },
+    { "type": "lines_table", "rows": "positionen",
+      "columns": [
+        { "head": "col.pos", "value": "{{pos.nr}}" },
+        { "head": "col.description", "value": "{{pos.beschreibung}}", "width": "*" },
+        { "head": "col.qty", "value": "{{pos.menge}} {{pos.einheit}}", "align": "right" },
+        { "head": "col.unit_price", "value": "{{pos.einzelpreis|money}}", "align": "right" },
+        { "head": "col.total", "value": "{{pos.gesamt|money}}", "align": "right" }
+      ] },
+    { "type": "totals", "rows": [
+        ["sum.net", "{{summe.netto|money}}"],
+        { "when": "steuer.art == 'normal'", "row": ["sum.vat", "{{summe.ust|money}}"] },
+        { "when": "steuer.art != 'normal'", "row": ["sum.vat_none", "{{summe.ust|money}}"] },
+        { "row": ["sum.gross.{{dokument.art}}", "{{summe.brutto|money}}"], "strong": true }
+      ] },
+    { "type": "note", "when": "steuer.art == 'reverse_charge'", "text": "note.reverse_charge", "framed": true },
+    { "type": "note", "when": "steuer.art == 'kleinunternehmer'", "text": "note.small_business" },
+    { "type": "paragraph", "when": "dokument.art == 'invoice'", "text": "payment.invoice" },
+    { "type": "paragraph", "when": "zahlung.link", "text": "payment.link" },
+    { "type": "paragraph", "when": "dokument.art == 'credit_note'", "text": "payment.credit_note" },
+    { "type": "footer", "columns": [
+        ["{{firma.name}} · {{firma.inhaber}}", "{{firma.adresse.einzeilig}}"],
+        ["UID: {{firma.uid}}", "{{firma.register}}"],
+        ["Bank: {{firma.bank.name}}", "IBAN: {{firma.bank.iban}} · BIC: {{firma.bank.bic}}"]
+      ] }
+  ]
+}

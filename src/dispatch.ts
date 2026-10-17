@@ -4,7 +4,8 @@
  */
 import { randomUUID } from "crypto";
 import type { Db } from "./db.js";
-import { LIVE_NOT_AVAILABLE, type ErpMode } from "./mode.js";
+import { LIVE_NOT_AVAILABLE, getLiveAdapter, type ErpMode } from "./mode.js";
+import { callLocalTool } from "./live/local/dispatch.js";
 import { list_items, get_item } from "./tools/items.js";
 import { find_customers, get_customer } from "./tools/customers.js";
 import { create_quote, update_quote, send_quote, list_quotes, get_quote } from "./tools/quotes.js";
@@ -65,8 +66,18 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
  * there is no local system to have refused anything. Both tables store the id
  * in their existing receipt_id column (internal storage name, unchanged).
  */
-export async function callTool(db: Db, mode: ErpMode, name: string, args: Record<string, any>): Promise<unknown> {
-  if (mode === "live") throw new Error(LIVE_NOT_AVAILABLE);
+export async function callTool(
+  db: Db,
+  mode: ErpMode,
+  name: string,
+  args: Record<string, any>,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<unknown> {
+  if (mode === "live") {
+    const adapter = getLiveAdapter(env);
+    if (adapter === "local") return callLocalTool(db, name, args, env);
+    throw new Error(LIVE_NOT_AVAILABLE);
+  }
   try {
     const result = await runTool(db, name, args);
     if (CHANGE_TOOLS.has(name)) {
