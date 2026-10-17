@@ -18,7 +18,11 @@ import { callTool } from "../src/dispatch.js";
 import { ALREADY_LOADED_MESSAGE } from "../src/tools/simulation.js";
 
 const pkg = JSON.parse(readFileSync(join(__dirname, "..", "examples", "package.example.json"), "utf8"));
-const TABLES = ["items", "customers", "quotes", "quote_lines", "quote_revisions", "orders", "refusals", "triggers", "simulation_load"];
+const TABLES = [
+  "items", "customers", "quotes", "quote_lines", "quote_revisions", "orders",
+  "invoices", "invoice_lines", "credit_notes", "credit_note_lines",
+  "refusals", "triggers", "simulation_load",
+];
 
 let dbPath = "";
 let db: Db | undefined;
@@ -37,7 +41,7 @@ afterEach(async () => {
   dbPath = "";
 });
 
-/** Load the package, then make one quote → order and one refused call. */
+/** Load the package, then make one quote → order → invoice → credit note, and one refused call. */
 async function useIt(db: Db) {
   await callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-load" });
   const items = (await callTool(db, "simulation", "list_items", {})) as any[];
@@ -47,7 +51,15 @@ async function useIt(db: Db) {
     customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 1 }], discount_pct: 0, value, currency: pkg.currency, ticket_id: "t-q",
   })) as any;
   await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: 1 });
-  await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: 1 });
+  const order = (await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: 1 })) as any;
+  const invoice = (await callTool(db, "simulation", "create_invoice", {
+    customer_id: customers[0].id, order_id: order.id, net_total: value, currency: pkg.currency, ticket_id: "t-inv",
+  })) as any;
+  // Explicit lines (rather than omitted/"credit everything") so credit_note_lines holds a row too.
+  await callTool(db, "simulation", "create_credit_note", {
+    invoice_id: invoice.id, credit_total: invoice.net_total, currency: pkg.currency, reason: "test", ticket_id: "t-cn",
+    lines: invoice.lines.map((l: any) => ({ item_id: l.item_id, description: l.description, qty: l.qty, unit_price: l.unit_price, vat_rate: l.vat_rate })),
+  });
   await expect(callTool(db, "simulation", "load_simulation", { package: pkg, ticket_id: "t-refused" })).rejects.toThrow(ALREADY_LOADED_MESSAGE);
   await db.run(`INSERT INTO triggers (scenario_id, request) VALUES ('s1', 'r')`);
 }

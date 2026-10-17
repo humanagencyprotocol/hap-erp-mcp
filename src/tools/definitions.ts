@@ -15,6 +15,94 @@ const LINE_SCHEMA = {
   required: ["item_id", "qty"],
 };
 
+const INVOICE_LINE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    item_id: { type: "string", description: "Item ID (optional)" },
+    description: { type: "string", description: "Line description" },
+    qty: { type: "number", description: "Quantity (positive)" },
+    unit_price: { type: "number", description: "Net unit price in the document currency" },
+    vat_rate: { type: "number", description: "VAT rate in percent, e.g. 20 for 20%" },
+  },
+  required: ["description", "qty", "unit_price", "vat_rate"],
+};
+
+const INVOICE_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Invoice",
+  properties: {
+    id: { type: "string", title: "Invoice ID" },
+    number: { type: "string", title: "Invoice number" },
+    customer_id: { type: "string", title: "Customer ID" },
+    order_id: { type: ["string", "null"], title: "Order ID" },
+    status: {
+      type: "string", title: "Status", enum: ["issued", "partially_credited", "credited"],
+      description: "An issued invoice is never changed or deleted — only credit notes move it to partially_credited or credited.",
+    },
+    currency: { type: "string", title: "Currency" },
+    net_total: { type: "number", title: "Net total" },
+    vat_total: { type: "number", title: "VAT total" },
+    gross_total: { type: "number", title: "Gross total" },
+    credited_total: { type: "number", title: "Credited so far", description: "Net amount credited back via credit notes." },
+    payment_term_days: { type: "number", title: "Payment term (days)" },
+    issued_at: { type: "string", title: "Issued at" },
+    due_date: { type: "string", title: "Due date" },
+    memo: { type: ["string", "null"], title: "Memo" },
+    lines: {
+      type: "array", title: "Lines",
+      items: {
+        type: "object",
+        properties: {
+          item_id: { type: ["string", "null"], title: "Item ID" },
+          description: { type: "string", title: "Description" },
+          qty: { type: "number", title: "Quantity" },
+          unit_price: { type: "number", title: "Unit price" },
+          vat_rate: { type: "number", title: "VAT rate (%)" },
+          line_net: { type: "number", title: "Line net" },
+          line_vat: { type: "number", title: "Line VAT" },
+          line_gross: { type: "number", title: "Line gross" },
+        },
+      },
+    },
+  },
+  required: ["id", "number", "status", "currency", "net_total", "vat_total", "gross_total", "credited_total", "issued_at", "due_date", "lines"],
+};
+
+const CREDIT_NOTE_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Credit note",
+  properties: {
+    id: { type: "string", title: "Credit note ID" },
+    number: { type: "string", title: "Credit note number" },
+    invoice_id: { type: "string", title: "Invoice ID" },
+    invoice_number: { type: "string", title: "Invoice number" },
+    customer_id: { type: "string", title: "Customer ID" },
+    currency: { type: "string", title: "Currency" },
+    net_total: { type: "number", title: "Net total" },
+    vat_total: { type: "number", title: "VAT total" },
+    gross_total: { type: "number", title: "Gross total" },
+    reason: { type: "string", title: "Reason" },
+    issued_at: { type: "string", title: "Issued at" },
+    lines: {
+      type: "array", title: "Lines",
+      items: {
+        type: "object",
+        properties: {
+          item_id: { type: ["string", "null"], title: "Item ID" },
+          description: { type: "string", title: "Description" },
+          qty: { type: "number", title: "Quantity" },
+          unit_price: { type: "number", title: "Unit price" },
+          vat_rate: { type: "number", title: "VAT rate (%)" },
+          line_net: { type: "number", title: "Line net" },
+          line_vat: { type: "number", title: "Line VAT" },
+          line_gross: { type: "number", title: "Line gross" },
+        },
+      },
+    },
+  },
+  required: ["id", "number", "invoice_id", "invoice_number", "customer_id", "currency", "net_total", "vat_total", "gross_total", "reason", "issued_at", "lines"],
+};
+
 export const TOOL_DEFINITIONS = [
   // --- Reads ---
   {
@@ -151,6 +239,56 @@ export const TOOL_DEFINITIONS = [
       required: ["id"],
     },
   },
+  {
+    name: "get_invoice",
+    description: "Get a single invoice with its lines. Accepts the invoice ID or its number (e.g. INV-2026-0001).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Invoice ID or number" },
+      },
+      required: ["id"],
+    },
+    outputSchema: INVOICE_OUTPUT_SCHEMA,
+  },
+  {
+    name: "list_invoices",
+    description: "List invoices, optionally filtered by customer or status",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string", description: "Filter by customer ID" },
+        status: { type: "string", enum: ["issued", "partially_credited", "credited"], description: "Filter by status" },
+        limit: { type: "number", description: "Maximum results to return (default: 50)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_credit_note",
+    description: "Get a single credit note with its lines",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Credit note ID" },
+      },
+      required: ["id"],
+    },
+    outputSchema: CREDIT_NOTE_OUTPUT_SCHEMA,
+  },
+  {
+    name: "list_credit_notes",
+    description: "List credit notes, optionally filtered by invoice or customer",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoice_id: { type: "string", description: "Filter by invoice ID" },
+        customer_id: { type: "string", description: "Filter by customer ID" },
+        limit: { type: "number", description: "Maximum results to return (default: 50)" },
+      },
+      required: [],
+    },
+  },
 
   // --- Changes ---
   {
@@ -235,6 +373,55 @@ export const TOOL_DEFINITIONS = [
         ticket_id: TICKET_FIELD,
       },
       required: ["id", "value", "discount_pct", "currency", "revision"],
+    },
+  },
+
+  {
+    name: "create_invoice",
+    description:
+      "Issue an invoice for a customer, from an order's lines or from explicit lines. An issued invoice is never " +
+      "changed or deleted — a cancellation or correction is create_credit_note. With order_id and no lines, the " +
+      "invoice's lines are taken from that order (its items, quantities, and the net prices it was ordered at); " +
+      "with explicit lines, each one declares its own description, quantity, unit price, and VAT rate. The " +
+      "connector recomputes the net total from the lines and refuses the call if the declared net_total, currency, " +
+      "or an order's ownership does not match. Refused if the order already carries an invoice that is not fully " +
+      "credited.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string", description: "Customer ID" },
+        order_id: { type: "string", description: "Order ID to invoice (optional if lines is given)" },
+        lines: { type: "array", items: INVOICE_LINE_SCHEMA, description: "Explicit invoice lines (optional — omit to take lines from order_id)" },
+        net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
+        currency: { type: "string", description: "Document currency — must match the order's currency, or the customer's if there is no order" },
+        payment_term_days: { type: "number", description: "Days until due, from issue (optional, default 14)" },
+        memo: { type: "string", description: "Free-form note (optional)" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["customer_id", "net_total", "currency"],
+    },
+  },
+  {
+    name: "create_credit_note",
+    description:
+      "Issue a credit note against an issued invoice — the only way to cancel or correct one; the invoice itself " +
+      "is never changed or deleted. Accepts the invoice's ID or its number. Pass explicit lines for a partial " +
+      "credit (each declaring its own description, quantity, unit price, and VAT rate); omit lines to credit " +
+      "everything on the invoice not yet credited. The connector recomputes the net total from the lines (or the " +
+      "remaining amount) and refuses the call if the declared credit_total or currency does not match, or if the " +
+      "credit would exceed what is left to credit on the invoice. On success the invoice's credited_total grows " +
+      "and its status becomes partially_credited or credited.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoice_id: { type: "string", description: "Invoice ID or number" },
+        credit_total: { type: "number", description: "Declared net credit total — must equal sum(qty*unit_price) over the lines, or the remaining uncredited net total when lines is omitted" },
+        currency: { type: "string", description: "Must match the invoice's currency" },
+        reason: { type: "string", description: "Why this credit note is being issued" },
+        lines: { type: "array", items: INVOICE_LINE_SCHEMA, description: "Explicit credit lines for a partial credit (optional — omit to credit everything not yet credited)" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["invoice_id", "credit_total", "currency", "reason"],
     },
   },
 

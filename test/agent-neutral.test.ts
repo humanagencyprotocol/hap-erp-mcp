@@ -28,11 +28,11 @@ afterEach(async () => { await db.close(); rmSync(dbPath, { force: true }); });
 describe("nothing the working agent sees reveals the simulation", () => {
   it("tool names, descriptions and argument descriptions", () => {
     const working = TOOL_DEFINITIONS.filter((t) => t.name !== "load_simulation" && t.name !== "clear_simulation");
-    expect(working.length).toBe(12);
+    expect(working.length).toBe(18);
     expect(JSON.stringify(working)).not.toMatch(LEAK);
   });
 
-  it("tool results across the quote → send → order flow", async () => {
+  it("tool results across the quote → send → order → invoice → credit note flow", async () => {
     await callTool(db, "simulation", "load_simulation", { package: pkg });
     const out: unknown[] = [];
     const items = (await callTool(db, "simulation", "list_items", {})) as any[];
@@ -43,8 +43,21 @@ describe("nothing the working agent sees reveals the simulation", () => {
       customer_id: customers[0].id, lines: [{ item_id: items[0].id, qty: 2 }], discount_pct: 0, value, currency: pkg.currency,
     })) as any;
     out.push(q, await callTool(db, "simulation", "send_quote", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: q.revision }));
-    out.push(await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: q.revision }));
+    const order = (await callTool(db, "simulation", "convert_quote_to_order", { id: q.id, value, discount_pct: 0, currency: pkg.currency, revision: q.revision })) as any;
+    out.push(order);
     out.push(await callTool(db, "simulation", "list_quotes", {}), await callTool(db, "simulation", "list_orders", {}));
+
+    const netTotal = order.lines.reduce((sum: number, l: any) => sum + l.qty * l.list_price, 0);
+    const invoice = (await callTool(db, "simulation", "create_invoice", {
+      customer_id: customers[0].id, order_id: order.id, net_total: netTotal, currency: pkg.currency,
+    })) as any;
+    out.push(invoice, await callTool(db, "simulation", "get_invoice", { id: invoice.id }), await callTool(db, "simulation", "list_invoices", {}));
+
+    const creditNote = (await callTool(db, "simulation", "create_credit_note", {
+      invoice_id: invoice.id, credit_total: invoice.net_total, currency: pkg.currency, reason: "returned goods",
+    })) as any;
+    out.push(creditNote, await callTool(db, "simulation", "get_credit_note", { id: creditNote.id }), await callTool(db, "simulation", "list_credit_notes", {}));
+
     expect(JSON.stringify(out)).not.toMatch(LEAK);
   });
 });

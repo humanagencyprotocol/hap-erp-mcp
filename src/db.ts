@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS items (
   unit TEXT NOT NULL DEFAULT 'pcs',
   list_price REAL NOT NULL,
   currency TEXT NOT NULL DEFAULT 'EUR',
-  stock INTEGER NOT NULL DEFAULT 0
+  stock INTEGER NOT NULL DEFAULT 0,
+  vat_rate REAL
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -96,6 +97,73 @@ CREATE TABLE IF NOT EXISTS orders (
   receipt_id TEXT
 );
 
+-- An issued invoice is never changed or deleted (German/Austrian invoicing law) —
+-- a correction is a credit_note with its own number. order_id is set when the
+-- invoice was raised from an order; null when raised from explicit lines.
+-- credited_total tracks the running net amount credited back via credit_notes
+-- (see that table); status derives from comparing it to net_total.
+CREATE TABLE IF NOT EXISTS invoices (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL UNIQUE,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  order_id TEXT REFERENCES orders(id),
+  status TEXT CHECK(status IN ('issued','partially_credited','credited')) NOT NULL DEFAULT 'issued',
+  currency TEXT NOT NULL,
+  net_total REAL NOT NULL,
+  vat_total REAL NOT NULL,
+  gross_total REAL NOT NULL,
+  credited_total REAL NOT NULL DEFAULT 0,
+  payment_term_days INTEGER NOT NULL DEFAULT 14,
+  issued_at TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  memo TEXT,
+  receipt_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS invoice_lines (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  item_id TEXT,
+  description TEXT NOT NULL,
+  qty REAL NOT NULL,
+  unit_price REAL NOT NULL,
+  vat_rate REAL NOT NULL,
+  line_net REAL NOT NULL,
+  line_vat REAL NOT NULL,
+  line_gross REAL NOT NULL
+);
+
+-- A cancellation or correction of an issued invoice — its own number, never a
+-- rewrite of the invoice. invoice_number is denormalized alongside invoice_id
+-- so a reader does not need a join to show what a credit note refers to.
+CREATE TABLE IF NOT EXISTS credit_notes (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL UNIQUE,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id),
+  invoice_number TEXT NOT NULL,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  currency TEXT NOT NULL,
+  net_total REAL NOT NULL,
+  vat_total REAL NOT NULL,
+  gross_total REAL NOT NULL,
+  reason TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  receipt_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS credit_note_lines (
+  id TEXT PRIMARY KEY,
+  credit_note_id TEXT NOT NULL REFERENCES credit_notes(id) ON DELETE CASCADE,
+  item_id TEXT,
+  description TEXT NOT NULL,
+  qty REAL NOT NULL,
+  unit_price REAL NOT NULL,
+  vat_rate REAL NOT NULL,
+  line_net REAL NOT NULL,
+  line_vat REAL NOT NULL,
+  line_gross REAL NOT NULL
+);
+
 -- Calls the connector refused AFTER the gateway let them through. When the gateway
 -- injected a receipt_id, a ticket exists for an action that never happened; this
 -- table is the only place that says so (the ticket alone reads like a done action).
@@ -153,6 +221,10 @@ const RECEIPT_ID_TABLES = ["quotes", "orders"];
 const ADDED_COLUMNS: Array<{ table: string; column: string; sqliteDdl: string; postgresDdl: string }> = [
   { table: "quotes", column: "revision", sqliteDdl: "INTEGER NOT NULL DEFAULT 1", postgresDdl: "INTEGER NOT NULL DEFAULT 1" },
   { table: "changes", column: "revision", sqliteDdl: "INTEGER", postgresDdl: "INTEGER" },
+  // Optional per-item VAT rate (%) — invoicing falls back to DEFAULT_VAT_RATE
+  // (money.ts) when an item carries none, which is every item today: neither
+  // the company file nor the simulation package format has a vat_rate field.
+  { table: "items", column: "vat_rate", sqliteDdl: "REAL", postgresDdl: "REAL" },
 ];
 
 const INSERT_ITEM = `INSERT INTO items (id, sku, name, unit, list_price, currency, stock) VALUES (?, ?, ?, ?, ?, ?, ?)`;
