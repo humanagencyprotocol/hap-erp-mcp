@@ -54,12 +54,15 @@ async function main() {
             text: JSON.stringify(result, null, 2),
           },
         ],
-        // get_quote, get_invoice and get_credit_note declare an outputSchema
-        // (their status/lifecycle fields are meant to be read generically,
-        // e.g. by a gateway rendering them without erp-specific code) —
-        // structuredContent carries the same object for clients that use it;
-        // the text content above still carries it for clients that don't.
-        ...(["get_quote", "get_invoice", "get_credit_note"].includes(name)
+        // get_quote, get_invoice, get_credit_note (their status/lifecycle
+        // fields are meant to be read generically, e.g. by a gateway
+        // rendering them without erp-specific code), and live/local's
+        // get_document + preview_invoice (so the gateway can actually read
+        // the rendered/archived PDF — see live/local/definitions.ts) all
+        // declare an outputSchema; structuredContent carries the same object
+        // for clients that use it, the text content above still carries it
+        // for clients that don't.
+        ...(["get_quote", "get_invoice", "get_credit_note", "get_document", "preview_invoice"].includes(name)
           ? { structuredContent: result as Record<string, unknown> }
           : {}),
       };

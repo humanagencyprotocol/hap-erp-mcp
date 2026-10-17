@@ -102,4 +102,23 @@ describe("renderInvoiceDocument", () => {
     expect(buf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     expect(buf.toString("latin1")).toContain("D:20261017"); // PDF date format prefix, from the fixed issuedAt
   });
+
+  it("is deterministic — identical template + vars + issuedAt render byte-identical PDFs on every call", async () => {
+    const vars = buildViewModel({
+      company: MUSTER_COMPANY,
+      customer: { name: "Test GmbH", addressLines: ["Street 1", "1010 Wien"], uid: null },
+      documentKind: "invoice",
+      number: "2026-0099",
+      issuedAt: new Date("2026-10-17T00:00:00Z"),
+      servicePeriod: { from: "2026-10-06", to: "2026-10-24" },
+      lines: [baseLine],
+      netTotal: 9000, vatTotal: 1800, grossTotal: 10800,
+      taxMode: "normal", vatRate: 20,
+      invoiceOnly: { paymentTermDays: 14, dueDate: new Date("2026-10-31") },
+    });
+    const issuedAt = new Date("2026-10-17T00:00:00Z");
+    const first = await renderInvoiceDocument(DEFAULT_TEMPLATE, vars, issuedAt);
+    const second = await renderInvoiceDocument(DEFAULT_TEMPLATE, vars, issuedAt);
+    expect(second.equals(first)).toBe(true);
+  });
 });

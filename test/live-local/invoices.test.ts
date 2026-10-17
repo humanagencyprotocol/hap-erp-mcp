@@ -25,6 +25,7 @@ import {
   seedDeCustomerNoUid,
   INVOICE_ARGS_BASE,
   MUSTER_COMPANY_KLEINUNTERNEHMER,
+  TODAY,
 } from "./fixtures.js";
 
 let db: Db;
@@ -62,8 +63,125 @@ describe("create_invoice — number", () => {
       ctx
     );
     await expect(
-      create_credit_note(db, { invoice_id: invoice.id, number: "2026-0001", credit_total: 100, currency: "EUR", reason: "test" }, ctx)
+      create_credit_note(db, { invoice_id: invoice.id, number: "2026-0001", document_date: TODAY, credit_total: 100, currency: "EUR", reason: "test" }, ctx)
     ).rejects.toThrow(/already been used/);
+  });
+});
+
+describe("create_invoice — document_date", () => {
+  it("is refused when missing", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("docdate-missing"));
+    const cust = await seedAtCustomer(db);
+    const { document_date, ...rest } = INVOICE_ARGS_BASE;
+    await expect(
+      create_invoice(db, { customer_id: cust.id, number: "2026-0030", ...rest, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/document_date is required/);
+  });
+
+  it("is refused for a non-ISO-date value", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("docdate-bad-format"));
+    const cust = await seedAtCustomer(db);
+    await expect(
+      create_invoice(db, { customer_id: cust.id, number: "2026-0031", ...INVOICE_ARGS_BASE, document_date: "18.10.2026", lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/document_date is required/);
+  });
+
+  it("is refused for a date that is not today, naming both dates", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("docdate-not-today"));
+    const cust = await seedAtCustomer(db);
+    await expect(
+      create_invoice(db, { customer_id: cust.id, number: "2026-0032", ...INVOICE_ARGS_BASE, document_date: "2020-01-01", lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(new RegExp(`dated 2020-01-01, today is ${TODAY}`));
+  });
+
+  it("is accepted when document_date is today, and prints as the due-date basis", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("docdate-today"));
+    const cust = await seedAtCustomer(db);
+    const invoice = await create_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0033", ...INVOICE_ARGS_BASE, payment_term_days: 14, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    );
+    expect(invoice.issued_at.slice(0, 10)).toBe(TODAY);
+  });
+});
+
+describe("create_credit_note — document_date", () => {
+  it("is refused when missing", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("cn-docdate-missing"));
+    const cust = await seedAtCustomer(db);
+    const invoice = await create_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0034", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    );
+    await expect(
+      create_credit_note(db, { invoice_id: invoice.id, number: "2026-G0010", credit_total: 100, currency: "EUR", reason: "test" }, ctx)
+    ).rejects.toThrow(/document_date is required/);
+  });
+
+  it("is refused for a date that is not today", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("cn-docdate-not-today"));
+    const cust = await seedAtCustomer(db);
+    const invoice = await create_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0035", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    );
+    await expect(
+      create_credit_note(db, { invoice_id: invoice.id, number: "2026-G0011", document_date: "2020-01-01", credit_total: 100, currency: "EUR", reason: "test" }, ctx)
+    ).rejects.toThrow(/propose it again with today's date/);
+  });
+});
+
+describe("preview_invoice — document_date", () => {
+  it("accepts a past or future date without the 'must be today' refusal, and prints it", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("preview-any-date"));
+    const cust = await seedAtCustomer(db);
+    const past = (await preview_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0040", ...INVOICE_ARGS_BASE, document_date: "2020-01-01", lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    )) as any;
+    expect(past.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const future = (await preview_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0040", ...INVOICE_ARGS_BASE, document_date: "2099-12-31", lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    )) as any;
+    expect(future.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(future.sha256).not.toBe(past.sha256); // different printed date -> different bytes
+  });
+
+  it("is still refused for a missing or malformed document_date (format is checked for every call)", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("preview-bad-docdate"));
+    const cust = await seedAtCustomer(db);
+    const { document_date, ...rest } = INVOICE_ARGS_BASE;
+    await expect(
+      preview_invoice(db, { customer_id: cust.id, number: "2026-0041", ...rest, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/document_date is required/);
+  });
+});
+
+describe("determinism — same request renders byte-identical PDFs", () => {
+  it("two preview_invoice calls with identical args produce identical bytes", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("det-preview-twice"));
+    const cust = await seedAtCustomer(db);
+    const args = { customer_id: cust.id, number: "2026-0050", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 };
+    const first = (await preview_invoice(db, args, ctx)) as any;
+    const second = (await preview_invoice(db, args, ctx)) as any;
+    expect(second.sha256).toBe(first.sha256);
+    expect(second.contentBase64).toBe(first.contentBase64);
+  });
+
+  it("preview_invoice's sha256 equals the issued archive's sha256 for the same arguments and today's date", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("det-preview-vs-issue"));
+    const cust = await seedAtCustomer(db);
+    const args = { customer_id: cust.id, number: "2026-0051", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 };
+    const preview = (await preview_invoice(db, args, ctx)) as any;
+    const invoice = await create_invoice(db, args, ctx);
+    expect(invoice.archive_sha256).toBe(preview.sha256);
   });
 });
 
@@ -249,7 +367,7 @@ describe("create_credit_note — template condition and reference to the invoice
     const creditNote = await create_credit_note(
       db,
       {
-        invoice_id: invoice.id, number: "2026-G0001", credit_total: 1500, currency: "EUR", reason: "Testzeitraum verkürzt",
+        invoice_id: invoice.id, number: "2026-G0001", document_date: TODAY, credit_total: 1500, currency: "EUR", reason: "Testzeitraum verkürzt",
         lines: [{ description: "Gutschrift: Reduktion", qty: 1, unit_price: 1500, vat_rate: 20 }],
       },
       ctx

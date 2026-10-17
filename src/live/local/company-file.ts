@@ -6,6 +6,7 @@
  * first problem — same discipline as company.ts's simulation company file.
  */
 import { readFileSync } from "fs";
+import { DEFAULT_TIMEZONE, isValidTimezone } from "./date.js";
 
 export interface LiveCompanyBank {
   name: string;
@@ -34,6 +35,14 @@ export interface LiveCompany {
   bank: LiveCompanyBank;
   default_payment_term_days: number;
   vat_mode: "normal" | "kleinunternehmer";
+  /**
+   * IANA timezone (e.g. "Europe/Vienna") whose calendar date is "today" for
+   * the create_invoice/create_credit_note document_date check (Andreas,
+   * 2026-10-18) — never the server process's own local timezone. Optional;
+   * defaults to "Europe/Vienna" (Suveren's home jurisdiction) if the person
+   * does not set one.
+   */
+  timezone: string;
 }
 
 function fail(path: string, msg: string): never {
@@ -87,6 +96,13 @@ export function parseLiveCompany(raw: unknown, path = "(inline)"): LiveCompany {
     fail(path, "`vat_mode` must be \"normal\" or \"kleinunternehmer\"");
   }
 
+  let timezone = DEFAULT_TIMEZONE;
+  if (c.timezone !== undefined && c.timezone !== null) {
+    if (!str(c.timezone)) fail(path, "`timezone`, if present, must be a non-empty string");
+    if (!isValidTimezone(c.timezone as string)) fail(path, `\`timezone\` ${JSON.stringify(c.timezone)} is not a recognized IANA timezone`);
+    timezone = c.timezone as string;
+  }
+
   return {
     name: c.name as string,
     owner: c.owner as string,
@@ -104,6 +120,7 @@ export function parseLiveCompany(raw: unknown, path = "(inline)"): LiveCompany {
     bank: { name: bank.name as string, iban: bank.iban as string, bic: bank.bic as string },
     default_payment_term_days: term as number,
     vat_mode: c.vat_mode as "normal" | "kleinunternehmer",
+    timezone,
   };
 }
 
