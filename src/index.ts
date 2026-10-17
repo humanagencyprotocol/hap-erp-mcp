@@ -48,12 +48,14 @@ async function main() {
             text: JSON.stringify(result, null, 2),
           },
         ],
-        // get_quote declares an outputSchema (its revision/status are meant
-        // to be read generically, e.g. by a gateway rendering them without
-        // erp-specific code) — structuredContent carries the same object for
-        // clients that use it; the text content above still carries it for
-        // clients that don't.
-        ...(name === "get_quote" ? { structuredContent: result as Record<string, unknown> } : {}),
+        // get_quote, get_invoice and get_credit_note declare an outputSchema
+        // (their status/lifecycle fields are meant to be read generically,
+        // e.g. by a gateway rendering them without erp-specific code) —
+        // structuredContent carries the same object for clients that use it;
+        // the text content above still carries it for clients that don't.
+        ...(["get_quote", "get_invoice", "get_credit_note"].includes(name)
+          ? { structuredContent: result as Record<string, unknown> }
+          : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

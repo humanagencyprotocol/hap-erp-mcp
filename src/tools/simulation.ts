@@ -18,7 +18,7 @@ export const ALREADY_LOADED_MESSAGE =
   "Refused: test data already loaded — a simulation can only be created, not edited; clear it first (clear_simulation), then load.";
 
 /** Tables that must be empty before a load. */
-const MUST_BE_EMPTY = ["simulation_load", "quotes", "orders", "items", "customers"] as const;
+const MUST_BE_EMPTY = ["simulation_load", "invoices", "quotes", "orders", "items", "customers"] as const;
 
 async function assertLoadable(db: Db): Promise<void> {
   for (const table of MUST_BE_EMPTY) {
@@ -32,6 +32,7 @@ async function assertLoadable(db: Db): Promise<void> {
 
 /** Every table that holds test data, in an order the foreign keys allow deleting. */
 const CLEAR_ORDER = [
+  "credit_note_lines", "credit_notes", "invoice_lines", "invoices",
   "quote_lines", "quote_revisions", "orders", "quotes", "items", "customers",
   "changes", "refusals", "triggers", "simulation_load",
 ] as const;

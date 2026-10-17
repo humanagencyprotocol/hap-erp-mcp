@@ -31,7 +31,10 @@ describe("tool documentation", () => {
       const props = (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
       expect(props).not.toHaveProperty("receipt_id");
     }
-    const writeTools = ["create_quote", "update_quote", "send_quote", "convert_quote_to_order", "load_simulation", "clear_simulation"];
+    const writeTools = [
+      "create_quote", "update_quote", "send_quote", "convert_quote_to_order",
+      "create_invoice", "create_credit_note", "load_simulation", "clear_simulation",
+    ];
     for (const name of writeTools) {
       const tool = TOOL_DEFINITIONS.find((t) => t.name === name)!;
       const props = (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};

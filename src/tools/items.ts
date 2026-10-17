@@ -8,6 +8,8 @@ export interface Item {
   list_price: number;
   currency: string;
   stock: number;
+  /** Percent, e.g. 20 for 20%. Null when the item carries no rate of its own (invoicing then falls back to DEFAULT_VAT_RATE). */
+  vat_rate: number | null;
 }
 
 export async function list_items(db: Db, args: Record<string, any>) {
