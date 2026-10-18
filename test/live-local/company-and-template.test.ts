@@ -76,3 +76,25 @@ describe("parseTemplate — fail whole", () => {
     expect(() => parseTemplate({ version: "1", language: "de", documents: ["invoice"], page: {}, texts: {}, blocks: [{}] })).toThrow(/template/);
   });
 });
+
+describe("settings paths and emptied fields (found 2026-10-18 on the first real setup)", () => {
+  it("a company file path starting with ~ is read from the home directory", async () => {
+    const { expandHome } = await import("../../src/live/local/paths");
+    const { homedir } = await import("node:os");
+    expect(expandHome("~/Documents/x.json")).toBe(`${homedir()}/Documents/x.json`);
+    expect(expandHome("/abs/x.json")).toBe("/abs/x.json");
+    expect(expandHome("~")).toBe(homedir());
+  });
+
+  it("an emptied register field means no register line, not an error", async () => {
+    const { parseLiveCompany } = await import("../../src/live/local/company-file");
+    const base = {
+      name: "Suveren", owner: "MUSTER", uid: "ATU00000000", email: "a@b.at", web: "x",
+      address: { street: "MUSTER-Straße 1", zip: "1010", city: "Wien", country: "Österreich", country_code: "AT" },
+      bank: { name: "B", iban: "AT00", bic: "X" }, default_payment_term_days: 14, vat_mode: "normal",
+    };
+    expect(parseLiveCompany({ ...base, register: "" }).register).toBeNull();
+    expect(parseLiveCompany({ ...base, register: "  " }).register).toBeNull();
+    expect(parseLiveCompany({ ...base, register: "GISA 1" }).register).toBe("GISA 1");
+  });
+});
