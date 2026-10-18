@@ -15,6 +15,7 @@ import type { Item } from "./items.js";
 import type { OrderRow } from "./orders.js";
 import { requireCustomer } from "./customers.js";
 import { loadQuoteLines } from "./quotes.js";
+import { validateDocumentDate, documentDateToUTCDate } from "../date.js";
 import {
   computeLineTotals,
   valuesMatch,
@@ -121,6 +122,18 @@ async function deriveLinesFromOrder(db: Db, order: OrderRow): Promise<InvoiceLin
   return out;
 }
 
+/**
+ * `document_date` is optional here (unlike live mode's "local" adapter,
+ * where it is required and checked against "today" — see
+ * live/local/date.ts): the simulation has no real calendar-date law to
+ * enforce. If given, it is used as the issue date instead of "now"; if
+ * omitted, behavior is unchanged from before this field existed.
+ */
+function resolveIssuedAt(documentDate: unknown): Date {
+  if (documentDate === undefined || documentDate === null) return new Date();
+  return documentDateToUTCDate(validateDocumentDate(documentDate));
+}
+
 function validatePaymentTermDays(value: unknown): number {
   if (value === undefined || value === null) return 14;
   if (!Number.isInteger(value) || (value as number) <= 0) {
@@ -203,10 +216,10 @@ export async function create_invoice(db: Db, args: Record<string, any>) {
     }
   }
 
+  const issuedAt = resolveIssuedAt(args.document_date);
   const id = uuidv4();
-  const year = new Date().getFullYear();
+  const year = issuedAt.getFullYear();
   const number = await nextNumberForYear(db, "invoices", "INV", year);
-  const issuedAt = new Date();
   const dueDate = new Date(issuedAt.getTime() + paymentTermDays * 24 * 60 * 60 * 1000);
 
   await db.run(
@@ -269,10 +282,11 @@ export async function create_credit_note(db: Db, args: Record<string, any>) {
     );
   }
 
+  const issuedAtDate = resolveIssuedAt(args.document_date);
   const id = uuidv4();
-  const year = new Date().getFullYear();
+  const year = issuedAtDate.getFullYear();
   const number = await nextNumberForYear(db, "credit_notes", "CN", year);
-  const issuedAt = new Date().toISOString();
+  const issuedAt = issuedAtDate.toISOString();
 
   await db.run(
     `INSERT INTO credit_notes (id, number, invoice_id, invoice_number, customer_id, currency, net_total, vat_total, gross_total, reason, issued_at, receipt_id)

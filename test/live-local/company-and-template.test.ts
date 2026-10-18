@@ -24,6 +24,27 @@ describe("parseLiveCompany — fail whole", () => {
   });
 });
 
+describe("parseLiveCompany — timezone", () => {
+  it("defaults to Europe/Vienna when absent", () => {
+    expect(parseLiveCompany(MUSTER_COMPANY).timezone).toBe("Europe/Vienna");
+  });
+
+  it("accepts an explicit valid IANA timezone", () => {
+    const withTz = { ...MUSTER_COMPANY, timezone: "America/New_York" };
+    expect(parseLiveCompany(withTz).timezone).toBe("America/New_York");
+  });
+
+  it("refuses an unrecognized timezone name", () => {
+    const bad = { ...MUSTER_COMPANY, timezone: "Not/A_Zone" };
+    expect(() => parseLiveCompany(bad)).toThrow(/timezone/);
+  });
+
+  it("refuses an empty-string timezone", () => {
+    const bad = { ...MUSTER_COMPANY, timezone: "" };
+    expect(() => parseLiveCompany(bad)).toThrow(/timezone/);
+  });
+});
+
 describe("addressOneLine", () => {
   it("joins street · zip city · country", () => {
     expect(addressOneLine(MUSTER_COMPANY.address)).toBe("MUSTER-Straße 1 · 1010 Wien · Österreich");

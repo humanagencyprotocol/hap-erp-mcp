@@ -6,6 +6,7 @@ import { createLocalDb } from "../../src/live/local/db.js";
 import { parseLiveCompany, type LiveCompany } from "../../src/live/local/company-file.js";
 import { loadTemplateFile, DEFAULT_TEMPLATE_PATH } from "../../src/live/local/template.js";
 import { addCustomer } from "../../src/live/local/tools/customers.js";
+import { todayInTimezone } from "../../src/live/local/date.js";
 import type { LocalCtx } from "../../src/live/local/tools/invoices.js";
 import type { Db } from "../../src/db.js";
 
@@ -79,7 +80,13 @@ export async function seedDeCustomerNoUid(db: Db) {
   });
 }
 
+// MUSTER_COMPANY declares no `timezone`, so it defaults to Europe/Vienna
+// (see company-file.ts) — this must match, or create_invoice/create_credit_note's
+// "document_date must be today" check would spuriously refuse every fixture.
+export const TODAY = todayInTimezone("Europe/Vienna");
+
 export const INVOICE_ARGS_BASE = {
+  document_date: TODAY,
   service_period: { from: "2026-10-06", to: "2026-10-24" },
   currency: "EUR",
 };

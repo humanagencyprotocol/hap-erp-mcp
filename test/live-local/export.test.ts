@@ -6,7 +6,7 @@ import type { Db } from "../../src/db.js";
 import type { LocalCtx } from "../../src/live/local/tools/invoices.js";
 import { create_invoice, create_credit_note } from "../../src/live/local/tools/invoices.js";
 import { exportInvoicesToDir } from "../../src/live/local/export.js";
-import { freshLocalCtx, cleanupDataDir, seedAtCustomer, INVOICE_ARGS_BASE } from "./fixtures.js";
+import { freshLocalCtx, cleanupDataDir, seedAtCustomer, INVOICE_ARGS_BASE, TODAY } from "./fixtures.js";
 
 let db: Db;
 let ctx: LocalCtx;
@@ -30,7 +30,7 @@ describe("export-invoices", () => {
     );
     await create_credit_note(
       db,
-      { invoice_id: invoice.id, number: "2026-G0001", credit_total: 1500, currency: "EUR", reason: "test", lines: [{ description: "Reduktion", qty: 1, unit_price: 1500, vat_rate: 20 }] },
+      { invoice_id: invoice.id, number: "2026-G0001", document_date: TODAY, credit_total: 1500, currency: "EUR", reason: "test", lines: [{ description: "Reduktion", qty: 1, unit_price: 1500, vat_rate: 20 }] },
       ctx
     );
 

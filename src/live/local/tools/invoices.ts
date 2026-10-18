@@ -12,6 +12,14 @@
  * the archive write fails, the function throws before any row exists and
  * before the number is reserved — "nothing is issued" is a consequence of
  * this ordering, not a separate check.
+ *
+ * `document_date` (Andreas, 2026-10-18) comes WITH the request on
+ * create_invoice/preview_invoice/create_credit_note alike — one consistent
+ * name for the printed date on either document kind — and is never replaced
+ * by "now": that is what makes a rendered preview and the document actually
+ * issued identical for the same arguments (see pdf-render.ts and date.ts).
+ * `preview_invoice` accepts any date; `create_invoice`/`create_credit_note`
+ * refuse one that is not today in the company's own calendar.
  */
 import { v4 as uuidv4 } from "uuid";
 import { basename } from "path";
@@ -33,6 +41,7 @@ import { renderInvoiceDocument } from "../pdf-render.js";
 import { archivePath, writeOnce, readAndVerify, sha256 as sha256Buffer } from "../archive.js";
 import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
+import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, type LocalCustomer } from "./customers.js";
 
 export interface LocalCtx {
@@ -135,6 +144,7 @@ function lineForTemplate(l: PricedInvoiceLine, unit: string): LineForTemplate {
 interface PreparedInvoice {
   customer: LocalCustomer;
   number: string;
+  documentDate: string;
   servicePeriod: { from: string; to: string };
   linesWithUnit: Array<InvoiceLineInput & { unit: string }>;
   totals: ReturnType<typeof computeLineTotals>;
@@ -147,6 +157,9 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
 
   const customer = await requireLocalCustomer(db, customer_id);
   const number = validateNumber(args.number);
+  // Format-only here — both create_invoice and preview_invoice call this;
+  // the "must be today" refusal is create_invoice's own, below (see date.ts).
+  const documentDate = validateDocumentDate(args.document_date);
   const servicePeriod = validateServicePeriod(args.service_period);
   const linesWithUnit = validateLocalLines(lines);
   const totals = computeLineTotals(linesWithUnit);
@@ -182,7 +195,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
           return args.payment_term_days as number;
         })();
 
-  return { customer, number, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
+  return { customer, number, documentDate, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
 }
 
 function invoiceVars(ctx: LocalCtx, prepared: PreparedInvoice, issuedAt: Date, dueDate: Date) {
@@ -222,9 +235,17 @@ export async function requireLocalInvoiceRow(db: Db, idOrNumber: string): Promis
 export async function create_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "invoice");
   const prepared = await prepareInvoice(db, args, ctx);
+  // Issuing — unlike preview_invoice — refuses a document_date that is not
+  // today in the company's own calendar (see date.ts): the printed date is
+  // the date on the request, never "now", and it must be today or the
+  // approved preview and the issued document could date-drift apart.
+  requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
   await requireNumberUnused(db, prepared.number);
 
-  const issuedAt = new Date();
+  // Fixed, non-"now" issue instant — the document's own date at UTC midnight
+  // — so re-rendering the same request (preview, then issue) is deterministic
+  // (see pdf-render.ts).
+  const issuedAt = documentDateToUTCDate(prepared.documentDate);
   const dueDate = new Date(issuedAt.getTime() + prepared.paymentTermDays * 24 * 60 * 60 * 1000);
   const vars = invoiceVars(ctx, prepared, issuedAt, dueDate);
 
@@ -276,8 +297,10 @@ export async function preview_invoice(db: Db, args: Record<string, any>, ctx: Lo
   requireDocumentSupported(ctx.template, "invoice");
   const prepared = await prepareInvoice(db, args, ctx);
   // Deliberately no requireNumberUnused — a preview does not consume the number.
+  // Deliberately no requireDocumentDateIsToday — an approver may want to see
+  // the PDF as it would print for any date; only create_invoice enforces it.
 
-  const issuedAt = new Date();
+  const issuedAt = documentDateToUTCDate(prepared.documentDate);
   const dueDate = new Date(issuedAt.getTime() + prepared.paymentTermDays * 24 * 60 * 60 * 1000);
   const vars = invoiceVars(ctx, prepared, issuedAt, dueDate);
 
@@ -321,6 +344,8 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
 
   if (typeof reason !== "string" || !reason.trim()) throw new Error("reason is required");
   const number = validateNumber(args.number);
+  const documentDate = validateDocumentDate(args.document_date);
+  requireDocumentDateIsToday(documentDate, ctx.company.timezone);
   await requireNumberUnused(db, number);
 
   const invoice = await requireLocalInvoiceRow(db, invoice_id);
@@ -353,7 +378,7 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   }
 
   const servicePeriod = args.service_period ? validateServicePeriod(args.service_period) : { from: invoice.service_period_from, to: invoice.service_period_to };
-  const issuedAt = new Date();
+  const issuedAt = documentDateToUTCDate(documentDate);
   const linesForTemplate = totals.lines.map((l, i) => lineForTemplate(l, linesWithUnit[i]?.unit ?? "Stk."));
 
   const vars = buildViewModel({

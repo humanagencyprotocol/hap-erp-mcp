@@ -25,6 +25,46 @@ const SERVICE_PERIOD_SCHEMA = {
   required: ["from", "to"],
 };
 
+// One consistent field name on every document-producing tool (Andreas,
+// 2026-10-18): the date comes WITH the request, never "now" — see
+// tools/invoices.ts and date.ts.
+const DOCUMENT_DATE_FIELD = {
+  type: "string" as const,
+  description:
+    "The document's date (ISO \"YYYY-MM-DD\"), printed on it and used to compute the due date. Required. " +
+    "create_invoice and create_credit_note refuse a date that is not today in the company's own calendar " +
+    "(see the company file's timezone, default Europe/Vienna) — propose the call again with today's date.",
+};
+
+const PREVIEW_DOCUMENT_DATE_FIELD = {
+  type: "string" as const,
+  description:
+    "The document's date (ISO \"YYYY-MM-DD\") as it would be printed. Required, but unlike create_invoice this " +
+    "accepts any date — a preview may show the document as it would print on a past, present, or future date.",
+};
+
+const DOCUMENT_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Document",
+  properties: {
+    filename: { type: "string", title: "Filename" },
+    contentType: { type: "string", title: "Content type" },
+    contentBase64: { type: "string", title: "Content (base64)" },
+    sha256: { type: "string", title: "SHA-256 fingerprint", description: "Of the raw PDF bytes — matches the archived fingerprint for an issued document." },
+  },
+  required: ["filename", "contentType", "contentBase64", "sha256"],
+};
+
+const PREVIEW_INVOICE_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Invoice preview",
+  properties: {
+    ...DOCUMENT_OUTPUT_SCHEMA.properties,
+    pages: { type: "number", title: "Pages" },
+  },
+  required: [...DOCUMENT_OUTPUT_SCHEMA.required, "pages"],
+};
+
 export const LOCAL_TOOL_DEFINITIONS = [
   {
     name: "find_customers",
@@ -61,6 +101,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
         number: { type: "string", description: "Invoice number — required, comes with the request" },
+        document_date: DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
         lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
@@ -69,7 +110,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
         memo: { type: "string", description: "Free-form note (optional)" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["customer_id", "number", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
     },
   },
   {
@@ -82,6 +123,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
         number: { type: "string", description: "Invoice number as it would appear on the rendered PDF" },
+        document_date: PREVIEW_DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
         lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
@@ -89,8 +131,9 @@ export const LOCAL_TOOL_DEFINITIONS = [
         payment_term_days: { type: "number", description: "Days until due, from issue (optional)" },
         memo: { type: "string", description: "Free-form note (optional)" },
       },
-      required: ["customer_id", "number", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
     },
+    outputSchema: PREVIEW_INVOICE_OUTPUT_SCHEMA,
   },
   {
     name: "create_credit_note",
@@ -103,6 +146,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
       properties: {
         invoice_id: { type: "string", description: "Invoice ID or number" },
         number: { type: "string", description: "Credit note number — required, comes with the request" },
+        document_date: DOCUMENT_DATE_FIELD,
         credit_total: { type: "number", description: "Declared net credit total" },
         currency: { type: "string", description: "Must match the invoice's currency" },
         reason: { type: "string", description: "Why this credit note is being issued" },
@@ -110,7 +154,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
         lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Explicit credit lines for a partial credit (optional)" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["invoice_id", "number", "credit_total", "currency", "reason"],
+      required: ["invoice_id", "number", "document_date", "credit_total", "currency", "reason"],
     },
   },
   {
@@ -170,5 +214,6 @@ export const LOCAL_TOOL_DEFINITIONS = [
       },
       required: ["kind", "id"],
     },
+    outputSchema: DOCUMENT_OUTPUT_SCHEMA,
   },
 ] as const;

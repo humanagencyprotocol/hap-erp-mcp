@@ -7,11 +7,19 @@
  * blocks appear, their texts, their conditions — comes from the template.
  * No code runs from a template.
  *
- * Deterministic metadata: CreationDate/ModDate are set to the document's own
- * issue date (never "now"), and no random IDs are embedded — see
- * createPdf's `info` below. This connector's own fingerprint (sha256 of the
- * rendered buffer, computed by the caller) is what makes the stored
- * fingerprint meaningful, not byte-for-byte reproducibility across runs.
+ * Deterministic by construction (Andreas, 2026-10-18): CreationDate/ModDate
+ * are set to the document's own `document_date` (never "now" — see
+ * tools/invoices.ts and date.ts), `compress: false` avoids zlib as a source
+ * of variance, and only the standard (non-embedded) Helvetica family is used,
+ * so pdfkit never generates a random font-subset tag. pdfkit's file ID
+ * (`/ID`) is itself a hash of `info` — including CreationDate — so it too is
+ * fixed for the same inputs; pdfkit only reaches for real randomness
+ * (`crypto.getRandomValues`) when encrypting with a password, which this
+ * connector never does. Net effect: the same template + vars + issuedAt
+ * render to byte-identical PDF bytes every time — this is what lets
+ * preview_invoice's sha256 equal the archived document's sha256 for the same
+ * request issued the same day, and lets the gateway re-check an approved
+ * preview against what create_invoice is about to produce.
  */
 import pdfMakeModule from "pdfmake";
 import type { InvoiceTemplate } from "./template.js";
