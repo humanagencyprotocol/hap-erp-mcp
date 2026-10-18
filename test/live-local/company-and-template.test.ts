@@ -52,10 +52,10 @@ describe("addressOneLine", () => {
 });
 
 describe("default template", () => {
-  it("loads and validates the bundled rechnung-de v1", () => {
+  it("loads and validates the bundled rechnung-de v2", () => {
     const t = loadTemplateFile(DEFAULT_TEMPLATE_PATH);
     expect(t.template).toBe("rechnung-de");
-    expect(t.version).toBe("1");
+    expect(t.version).toBe("2");
     expect(t.documents).toEqual(expect.arrayContaining(["invoice", "credit_note"]));
   });
 

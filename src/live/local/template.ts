@@ -42,8 +42,8 @@ function findPackageRoot(startDir: string): string {
   throw new Error(`Could not locate package root above ${startDir}`);
 }
 
-/** Bundled default — the repo's own copy of the signed-off `rechnung-de.v1.json` draft. */
-export const DEFAULT_TEMPLATE_PATH = join(findPackageRoot(__dirname), "templates", "rechnung-de.v1.json");
+/** Bundled default. v2: a one-day service shows "Leistungsdatum" instead of a day-to-same-day range. v1 stays shipped for invoices that named it. */
+export const DEFAULT_TEMPLATE_PATH = join(findPackageRoot(__dirname), "templates", "rechnung-de.v2.json");
 
 function fail(path: string, msg: string): never {
   throw new Error(`Invoice template ${path}: ${msg}`);

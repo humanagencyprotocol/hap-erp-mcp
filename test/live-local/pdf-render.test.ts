@@ -40,6 +40,35 @@ describe("reverse charge — template condition", () => {
   });
 });
 
+describe("service date vs. service period — template condition", () => {
+  const vm = (from: string, to: string) => buildViewModel({
+    company: MUSTER_COMPANY,
+    customer: { name: "Test", addressLines: ["Viktorgasse 1", "1040 Wien"] },
+    documentKind: "invoice",
+    number: "TEST-2026-0002",
+    issuedAt: new Date("2026-10-18"),
+    servicePeriod: { from, to },
+    lines: [baseLine],
+    netTotal: 9000, vatTotal: 1800, grossTotal: 10800,
+    taxMode: "normal", vatRate: 20,
+    invoiceOnly: { paymentTermDays: 14, dueDate: new Date("2026-11-01") },
+  });
+
+  it("one day → \"Leistungsdatum 18.10.2026\", no day-to-same-day range", () => {
+    const text = dump(DEFAULT_TEMPLATE, vm("2026-10-18", "2026-10-18"));
+    expect(text).toMatch(/Leistungsdatum/);
+    expect(text).not.toMatch(/Leistungszeitraum/);
+    expect(text).not.toMatch(/18\.10\.2026 – 18\.10\.2026/);
+  });
+
+  it("several days → \"Leistungszeitraum\" with the range", () => {
+    const text = dump(DEFAULT_TEMPLATE, vm("2026-10-06", "2026-10-24"));
+    expect(text).toMatch(/Leistungszeitraum/);
+    expect(text).toMatch(/06\.10\.2026 – 24\.10\.2026/);
+    expect(text).not.toMatch(/Leistungsdatum/);
+  });
+});
+
 describe("kleinunternehmer — template condition", () => {
   it("includes the small-business exemption note instead of the reverse-charge note", () => {
     const vars = buildViewModel({
