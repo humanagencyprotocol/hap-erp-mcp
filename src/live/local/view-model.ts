@@ -59,6 +59,10 @@ export function buildViewModel(input: BuildViewModelInput): Record<string, unkno
         },
     leistung: {
       zeitraum: `${formatDate(input.servicePeriod.from)} – ${formatDate(input.servicePeriod.to)}`,
+      // A one-day service reads as a date ("Leistungsdatum"), not a range from
+      // a day to the same day — the template chooses via `when`.
+      datum: formatDate(input.servicePeriod.from),
+      ein_tag: input.servicePeriod.from === input.servicePeriod.to,
     },
     kunde: {
       name: customer.name,
