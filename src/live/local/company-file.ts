@@ -5,6 +5,7 @@
  * tool to read or change it. Validated strictly and refused whole on the
  * first problem — same discipline as company.ts's simulation company file.
  */
+import { expandHome } from "./paths.js";
 import { readFileSync } from "fs";
 import { DEFAULT_TIMEZONE, isValidTimezone } from "./date.js";
 
@@ -53,8 +54,10 @@ function str(v: unknown): v is string {
   return typeof v === "string" && v.trim() !== "";
 }
 
+/** Optional text: absent, null, or empty all mean "not set" (an emptied
+ *  field in the company file is not an error — found 2026-10-18). */
 function optionalStr(v: unknown): v is string | undefined {
-  return v === undefined || v === null || str(v);
+  return v === undefined || v === null || (typeof v === "string" && (v.trim() === "" || str(v)));
 }
 
 /** Single-line address, e.g. "Hauptstraße 1 · 1010 Wien · Österreich" — for the sender line / letterhead. */
@@ -71,7 +74,7 @@ export function parseLiveCompany(raw: unknown, path = "(inline)"): LiveCompany {
   if (!str(c.uid)) fail(path, "`uid` is required");
   if (!str(c.email)) fail(path, "`email` is required");
   if (!str(c.web)) fail(path, "`web` is required");
-  if (!optionalStr(c.register)) fail(path, "`register`, if present, must be a non-empty string");
+  if (!optionalStr(c.register)) fail(path, "`register` must be text or null");
 
   const addr = (c.address ?? {}) as Record<string, unknown>;
   if (!str(addr.street)) fail(path, "`address.street` is required");
@@ -142,5 +145,5 @@ export function resolveLiveCompany(env: NodeJS.ProcessEnv = process.env): LiveCo
       "Refused: ERP_LIVE_COMPANY_FILE is required in live/local mode (the person's company data — name, address, UID, bank, VAT mode). Nothing was read or changed."
     );
   }
-  return loadLiveCompanyFile(path);
+  return loadLiveCompanyFile(expandHome(path));
 }

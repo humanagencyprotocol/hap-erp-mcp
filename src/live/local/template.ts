@@ -6,6 +6,7 @@
  * operations (`{{variable}}` substitution, `|money`/`|date` filters, `when`
  * comparisons) the renderer supports against it.
  */
+import { expandHome } from "./paths.js";
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -73,7 +74,8 @@ export function loadTemplateFile(path: string): InvoiceTemplate {
 
 /** Resolves ERP_INVOICE_TEMPLATE, falling back to the bundled default. */
 export function resolveTemplate(env: NodeJS.ProcessEnv = process.env): { template: InvoiceTemplate; path: string } {
-  const path = env.ERP_INVOICE_TEMPLATE?.trim() || DEFAULT_TEMPLATE_PATH;
+  const configured = env.ERP_INVOICE_TEMPLATE?.trim();
+  const path = configured ? expandHome(configured) : DEFAULT_TEMPLATE_PATH;
   return { template: loadTemplateFile(path), path };
 }
 
