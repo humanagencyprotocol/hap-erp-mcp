@@ -56,8 +56,8 @@ async function main() {
         ],
         // get_quote, get_invoice, get_credit_note (their status/lifecycle
         // fields are meant to be read generically, e.g. by a gateway
-        // rendering them without erp-specific code), and live/local's
-        // get_document + preview_invoice (so the gateway can actually read
+        // rendering them without erp-specific code), get_document (simulation
+        // and live/local) and preview_invoice (live/local) (so the gateway can actually read
         // the rendered/archived PDF — see live/local/definitions.ts) all
         // declare an outputSchema; structuredContent carries the same object
         // for clients that use it, the text content above still carries it
