@@ -127,6 +127,26 @@ function validateLocalLines(lines: unknown): Array<InvoiceLineInput & { unit: st
   });
 }
 
+/**
+ * Line VAT must agree with the tax mode the connector derived. Reverse charge
+ * (the customer owes the VAT) and the small-business exemption mean no VAT on
+ * any line; an invoice saying "reverse charge" AND charging 20 % is legally
+ * wrong — and was issued with every check passing (Rehearsal demo, 2026-10-19).
+ * Normal mode stays open: 0 % lines can be legitimately exempt.
+ */
+function refuseIfVatContradictsTaxMode(lines: Array<{ vat_rate: number }>, taxMode: TaxMode, what: string): void {
+  if (taxMode === "normal") return;
+  const bad = lines.map((l, i) => ({ i, rate: l.vat_rate })).filter((x) => x.rate !== 0);
+  if (bad.length === 0) return;
+  const why = taxMode === "reverse_charge"
+    ? "the customer is in another EU country and has a VAT ID, so the tax liability passes to them (reverse charge)"
+    : "the company is a small business exempt from VAT (Kleinunternehmer)";
+  throw new Error(
+    `Refused: ${what} lines must have vat_rate 0 — ${why}. ` +
+      `Lines with VAT: ${bad.map((b) => `lines[${b.i}] ${b.rate}%`).join(", ")}. Nothing was issued.`
+  );
+}
+
 async function requireNumberUnused(db: Db, number: string): Promise<void> {
   const row = await db.get<{ n: number }>("SELECT COUNT(*) as n FROM local_numbers WHERE number = ?", [number]);
   if ((row?.n ?? 0) > 0) throw new Error(`Refused: number ${JSON.stringify(number)} has already been used (invoice or credit note). Nothing was issued.`);
@@ -184,6 +204,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
     },
     totals.gross_total
   );
+  refuseIfVatContradictsTaxMode(linesWithUnit, taxMode, "invoice");
 
   const paymentTermDays =
     args.payment_term_days === undefined || args.payment_term_days === null
@@ -358,6 +379,8 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   if (lines !== undefined) {
     linesWithUnit = validateLocalLines(lines);
     totals = computeLineTotals(linesWithUnit);
+    // A credit note shares the invoice's tax treatment — its lines too.
+    refuseIfVatContradictsTaxMode(linesWithUnit, invoice.tax_mode as TaxMode, "credit note");
   } else {
     const remainingNet = roundToCents(invoice.net_total - invoice.credited_total);
     const effectiveVatRate = invoice.net_total > 0 ? invoice.vat_total / invoice.net_total : 0;
