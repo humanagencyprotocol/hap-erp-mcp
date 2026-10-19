@@ -242,6 +242,49 @@ describe("create_invoice — reverse charge", () => {
   });
 });
 
+describe("line VAT must agree with the derived tax mode (Rehearsal demo, 2026-10-19)", () => {
+  it("reverse charge with 20 % on a line is refused, nothing issued", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("rc-vat20"));
+    const cust = await seedDeCustomer(db);
+    await expect(
+      create_invoice(db, { customer_id: cust.id, number: "2026-0101", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/vat_rate 0 — the customer is in another EU country.*reverse charge.*lines\[0\] 20%/);
+    expect(await db.all("SELECT * FROM local_invoices")).toHaveLength(0);
+  });
+
+  it("the preview refuses the same way — the approval card shows it before anyone approves", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("rc-vat20-preview"));
+    const cust = await seedDeCustomer(db);
+    await expect(
+      preview_invoice(db, { customer_id: cust.id, number: "2026-0102", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/vat_rate 0/);
+  });
+
+  it("small-business exemption with VAT on a line is refused", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("ku-vat", MUSTER_COMPANY_KLEINUNTERNEHMER));
+    const cust = await seedAtCustomer(db);
+    await expect(
+      create_invoice(db, { customer_id: cust.id, number: "2026-0103", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 }, ctx)
+    ).rejects.toThrow(/Kleinunternehmer/);
+  });
+
+  it("normal mode keeps 0 % lines possible (exempt items)", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("normal-zero"));
+    const cust = await seedAtCustomer(db);
+    const inv = await create_invoice(db, { customer_id: cust.id, number: "2026-0104", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 0 }], net_total: 100 }, ctx);
+    expect(inv.tax_mode).toBe("normal");
+  });
+
+  it("a credit note on a reverse-charge invoice may not add VAT on its lines", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("rc-credit"));
+    const cust = await seedDeCustomer(db);
+    const inv = await create_invoice(db, { customer_id: cust.id, number: "2026-0105", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 0 }], net_total: 100 }, ctx);
+    await expect(
+      create_credit_note(db, { invoice_id: inv.id, number: "2026-0106", document_date: INVOICE_ARGS_BASE.document_date, reason: "Teilgutschrift", currency: "EUR", lines: [{ description: "X", qty: 1, unit_price: 50, vat_rate: 20 }], credit_total: 50 }, ctx)
+    ).rejects.toThrow(/credit note lines must have vat_rate 0/);
+  });
+});
+
 describe("create_invoice — UID required above €10,000 gross", () => {
   it("is refused for a home-country customer with no UID, above the threshold", async () => {
     ({ db, ctx, dataDir } = await freshLocalCtx("uid-10k"));
