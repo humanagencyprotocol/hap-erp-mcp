@@ -128,11 +128,12 @@ function renderAddressAndMeta(block: any, vars: Record<string, unknown>, texts: 
           vLineWidth: () => 0,
           paddingLeft: (i: number) => (i === 0 ? 0 : 6),
           paddingRight: () => 0,
-          paddingTop: () => 1,
-          paddingBottom: () => 1,
+          paddingTop: () => rowPadding(block, 1),
+          paddingBottom: () => rowPadding(block, 1),
         },
       },
     ],
+    margin: [0, spaceBefore(block, 0), 0, 0],
   };
 }
 
@@ -148,6 +149,9 @@ function renderHeading(block: any, vars: Record<string, unknown>, texts: Record<
  */
 function spaceBefore(block: any, fallback: number): number {
   return typeof block.space_before === "number" ? block.space_before : fallback;
+}
+function ruleGap(block: any): number {
+  return typeof block.rule_gap === "number" ? block.rule_gap : 0;
 }
 function rowPadding(block: any, fallback: number): number {
   return typeof block.row_padding === "number" ? block.row_padding : fallback;
@@ -206,8 +210,10 @@ function renderTotals(block: any, vars: Record<string, unknown>, texts: Record<s
       hLineColor: () => BLACK,
       paddingLeft: () => 2,
       paddingRight: () => 2,
-      paddingTop: () => rowPadding(block, 1),
-      paddingBottom: () => rowPadding(block, 1),
+      // `rule_gap`: extra space between the rule above the last (total) row
+      // and its text, and above the rule — absent → 0, the old look.
+      paddingTop: (i: number, node: any) => rowPadding(block, 1) + (i === node.table.body.length - 1 ? ruleGap(block) : 0),
+      paddingBottom: (i: number, node: any) => rowPadding(block, 1) + (i === node.table.body.length - 2 ? ruleGap(block) : 0),
     },
     alignment: "right",
     margin: [140, spaceBefore(block, 4), 0, 0],
@@ -336,7 +342,12 @@ export async function renderInvoiceDocument(
     // simplest possible tooling, and it keeps the content stream plain text
     // for the sha256 fingerprint to mean something to a human inspecting it.
     compress: false,
-    defaultStyle: { font: "Helvetica", fontSize: template.page.font_size || 10 },
+    defaultStyle: {
+      font: "Helvetica",
+      fontSize: template.page.font_size || 10,
+      // Line spacing of all text, from the template (absent → pdfmake's 1).
+      ...(typeof template.page.line_height === "number" ? { lineHeight: template.page.line_height } : {}),
+    },
     info: {
       title: `${substitute("{{dokument.art}}", vars)} ${substitute("{{dokument.nummer}}", vars)}`,
       creationDate,

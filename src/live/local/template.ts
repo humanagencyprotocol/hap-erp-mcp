@@ -16,7 +16,7 @@ export interface InvoiceTemplate {
   version: string;
   language: string;
   documents: string[];
-  page: { size: string; margins_mm: [number, number, number, number]; font: string; font_size: number };
+  page: { size: string; margins_mm: [number, number, number, number]; font: string; font_size: number; line_height?: number };
   texts: Record<string, string>;
   blocks: unknown[];
 }
@@ -42,8 +42,8 @@ function findPackageRoot(startDir: string): string {
   throw new Error(`Could not locate package root above ${startDir}`);
 }
 
-/** Bundled default. v3 = v2 (Leistungsdatum for one-day services) + more generous spacing declared in the template (row_padding, space_before, column widths). v1/v2 stay shipped and render unchanged. */
-export const DEFAULT_TEMPLATE_PATH = join(findPackageRoot(__dirname), "templates", "rechnung-de.v3.json");
+/** Bundled default. v4 = v3 + line spacing (page.line_height), roomier address/info block, gap around the total's rule — all declared in the template. v1–v3 stay shipped and render unchanged. */
+export const DEFAULT_TEMPLATE_PATH = join(findPackageRoot(__dirname), "templates", "rechnung-de.v4.json");
 
 function fail(path: string, msg: string): never {
   throw new Error(`Invoice template ${path}: ${msg}`);
