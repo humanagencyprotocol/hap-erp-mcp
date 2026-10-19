@@ -102,6 +102,7 @@ export function buildViewModel(input: BuildViewModelInput): Record<string, unkno
       web: company.web,
       register: company.register ?? "",
       bank: { name: company.bank.name, iban: company.bank.iban, bic: company.bank.bic },
+      logo_svg: company.logo_svg ?? "",
     },
   };
 }

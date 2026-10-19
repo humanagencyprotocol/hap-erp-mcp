@@ -52,10 +52,10 @@ describe("addressOneLine", () => {
 });
 
 describe("default template", () => {
-  it("loads and validates the bundled rechnung-de v3", () => {
+  it("loads and validates the bundled rechnung-de v4", () => {
     const t = loadTemplateFile(DEFAULT_TEMPLATE_PATH);
     expect(t.template).toBe("rechnung-de");
-    expect(t.version).toBe("3");
+    expect(t.version).toBe("4");
     expect(t.documents).toEqual(expect.arrayContaining(["invoice", "credit_note"]));
   });
 
@@ -96,5 +96,36 @@ describe("settings paths and emptied fields (found 2026-10-18 on the first real 
     expect(parseLiveCompany({ ...base, register: "" }).register).toBeNull();
     expect(parseLiveCompany({ ...base, register: "  " }).register).toBeNull();
     expect(parseLiveCompany({ ...base, register: "GISA 1" }).register).toBe("GISA 1");
+  });
+});
+
+describe("company logo (logo_svg) — Andreas 2026-10-19", () => {
+  const withFiles = async (files: Record<string, string>) => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "erp-logo-"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+    return (name: string) => join(dir, name);
+  };
+  const company = (logo?: string) => JSON.stringify({ ...MUSTER_COMPANY, ...(logo !== undefined ? { logo_svg: logo } : {}) });
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+
+  it("reads the SVG named relative to the company file", async () => {
+    const { loadLiveCompanyFile } = await import("../../src/live/local/company-file.js");
+    const at = await withFiles({ "logo.svg": SVG, "company.json": company("logo.svg") });
+    expect(loadLiveCompanyFile(at("company.json")).logo_svg).toBe(SVG);
+  });
+  it("no logo_svg → no logo (the name stays text)", async () => {
+    const { loadLiveCompanyFile } = await import("../../src/live/local/company-file.js");
+    const at = await withFiles({ "company.json": company() });
+    expect(loadLiveCompanyFile(at("company.json")).logo_svg).toBeUndefined();
+  });
+  it("refuses a non-.svg path, a missing file, and a file that is not SVG", async () => {
+    const { loadLiveCompanyFile } = await import("../../src/live/local/company-file.js");
+    const at = await withFiles({ "logo.png": "x", "fake.svg": "<html></html>", "a.json": company("logo.png"), "b.json": company("missing.svg"), "c.json": company("fake.svg") });
+    expect(() => loadLiveCompanyFile(at("a.json"))).toThrow(/\.svg file/);
+    expect(() => loadLiveCompanyFile(at("b.json"))).toThrow(/cannot be read/);
+    expect(() => loadLiveCompanyFile(at("c.json"))).toThrow(/not SVG markup/);
   });
 });

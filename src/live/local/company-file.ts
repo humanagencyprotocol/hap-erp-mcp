@@ -6,7 +6,8 @@
  * first problem — same discipline as company.ts's simulation company file.
  */
 import { expandHome } from "./paths.js";
-import { readFileSync } from "fs";
+import { readFileSync, statSync } from "fs";
+import { dirname, resolve as resolvePath } from "path";
 import { DEFAULT_TIMEZONE, isValidTimezone } from "./date.js";
 
 export interface LiveCompanyBank {
@@ -44,7 +45,15 @@ export interface LiveCompany {
    * does not set one.
    */
   timezone: string;
+  /**
+   * The company logo as SVG markup, read from the file the company file names
+   * in `logo_svg` (a path, relative to the company file or with ~). Absent →
+   * the template shows the company name as text.
+   */
+  logo_svg?: string;
 }
+
+const MAX_LOGO_BYTES = 512 * 1024;
 
 function fail(path: string, msg: string): never {
   throw new Error(`Company file ${path}: ${msg}`);
@@ -134,7 +143,20 @@ export function loadLiveCompanyFile(path: string): LiveCompany {
   } catch (err) {
     fail(path, `cannot be read as JSON (${err instanceof Error ? err.message : String(err)})`);
   }
-  return parseLiveCompany(raw, path);
+  const company = parseLiveCompany(raw, path);
+  const logoRef = (raw as Record<string, unknown>).logo_svg;
+  if (logoRef === undefined || logoRef === null || logoRef === "") return company;
+  if (!str(logoRef) || !/\.svg$/i.test(logoRef as string)) fail(path, "`logo_svg`, if present, must be a path to an .svg file");
+  const logoPath = resolvePath(dirname(path), expandHome(logoRef as string));
+  let svg: string;
+  try {
+    if (statSync(logoPath).size > MAX_LOGO_BYTES) fail(path, `\`logo_svg\` ${logoPath} is larger than 512 KB`);
+    svg = readFileSync(logoPath, "utf8");
+  } catch (err) {
+    fail(path, `\`logo_svg\` ${logoPath} cannot be read (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (!/<svg[\s>]/i.test(svg)) fail(path, `\`logo_svg\` ${logoPath} is not SVG markup`);
+  return { ...company, logo_svg: svg };
 }
 
 /** Resolves ERP_LIVE_COMPANY_FILE — required in local live mode; throws clearly if unset or invalid. */
