@@ -199,3 +199,30 @@ describe("v4 (default): line spacing and the total's rule gap come from the temp
     expect(totals.layout.paddingTop(0, node)).toBe(3);
   });
 });
+
+describe("v4 letterhead and totals (Andreas 2026-10-19)", () => {
+  const vm = (logo?: string) => buildViewModel({
+    company: { ...MUSTER_COMPANY, ...(logo ? { logo_svg: logo } : {}) }, customer: { name: "Test", addressLines: ["Viktorgasse 1", "1040 Wien"] },
+    documentKind: "invoice", number: "T-3", issuedAt: new Date("2026-10-19"),
+    servicePeriod: { from: "2026-10-19", to: "2026-10-19" }, lines: [baseLine],
+    netTotal: 9000, vatTotal: 1800, grossTotal: 10800, taxMode: "normal", vatRate: 20,
+    invoiceOnly: { paymentTermDays: 14, dueDate: new Date("2026-11-02") },
+  } as never);
+  const letterheadLeft = (vars: Record<string, unknown>) => (resolveTemplateBlocks(DEFAULT_TEMPLATE, vars).content as any[])[0].columns[0].stack;
+
+  it("the letterhead shows the address once — no address line under the name", () => {
+    const stack = letterheadLeft(vm());
+    expect(stack).toHaveLength(1);
+    expect(stack[0].text).toBe(MUSTER_COMPANY.name);
+  });
+  it("a logo replaces the name", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+    const stack = letterheadLeft(vm(svg));
+    expect(stack[0]).toEqual({ svg, width: 140 });
+  });
+  it("the totals span the page width, so the rule above the total does too", () => {
+    const totals = (resolveTemplateBlocks(DEFAULT_TEMPLATE, vm()).content as any[]).find((b) => b?.table?.widths?.[0] === "*" && b?.alignment === "right");
+    expect(totals.margin[0]).toBe(0);
+    expect(totals.table.body[0][0].alignment).toBe("right");
+  });
+});

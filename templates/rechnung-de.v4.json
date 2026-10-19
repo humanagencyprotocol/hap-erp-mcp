@@ -51,13 +51,14 @@
     {
       "type": "letterhead",
       "left": [
-        "{{firma.name}}",
-        "{{firma.inhaber}} · {{firma.adresse.einzeilig}}"
+        "{{firma.name}}"
       ],
       "right": [
         "{{firma.email}}",
         "{{firma.web}}"
-      ]
+      ],
+      "logo": "firma.logo_svg",
+      "logo_width": 140
     },
     {
       "type": "sender_line",
@@ -186,7 +187,8 @@
       ],
       "row_padding": 3,
       "space_before": 10,
-      "rule_gap": 5
+      "rule_gap": 5,
+      "full_width": true
     },
     {
       "type": "note",

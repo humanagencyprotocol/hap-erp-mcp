@@ -78,17 +78,26 @@ function normalizeRows(
 function renderLetterhead(block: any, vars: Record<string, unknown>) {
   const left: string[] = block.left ?? [];
   const right: string[] = block.right ?? [];
+  // `logo`: a vars path to SVG markup (the company file's logo_svg). When it
+  // holds a logo, it replaces the first left line (the name as text);
+  // `logo_width` (pt) sizes it. No logo → the name as text, as before.
+  const logo = typeof block.logo === "string" ? get(vars, block.logo) : undefined;
+  const hasLogo = typeof logo === "string" && logo.trim() !== "";
+  const lines = left.map((t, i) => ({
+    text: substitute(t, vars),
+    bold: i === 0,
+    fontSize: i === 0 ? 16 : 8,
+    color: i === 0 ? BLACK : GRAY,
+    margin: [0, i === 0 ? 0 : 2, 0, 0],
+  }));
+  const stack = hasLogo
+    ? [{ svg: logo as string, width: typeof block.logo_width === "number" ? block.logo_width : 120 }, ...lines.slice(1)]
+    : lines;
   return {
     columns: [
       {
         width: "*",
-        stack: left.map((t, i) => ({
-          text: substitute(t, vars),
-          bold: i === 0,
-          fontSize: i === 0 ? 16 : 8,
-          color: i === 0 ? BLACK : GRAY,
-          margin: [0, i === 0 ? 0 : 2, 0, 0],
-        })),
+        stack,
       },
       {
         width: "auto",
@@ -198,8 +207,11 @@ function renderLinesTable(block: any, vars: Record<string, unknown>, texts: Reco
 
 function renderTotals(block: any, vars: Record<string, unknown>, texts: Record<string, string>) {
   const rows = normalizeRows(block.rows ?? [], vars, texts);
+  // `full_width`: the totals span the page width (labels right-aligned next
+  // to their amounts), so the rule above the total runs across the page.
+  const full = block.full_width === true;
   const body = rows.map((r) => [
-    { text: r.label, bold: r.strong },
+    { text: r.label, bold: r.strong, ...(full ? { alignment: "right" } : {}) },
     { text: r.value, bold: r.strong, alignment: "right" },
   ]);
   return {
@@ -216,7 +228,7 @@ function renderTotals(block: any, vars: Record<string, unknown>, texts: Record<s
       paddingBottom: (i: number, node: any) => rowPadding(block, 1) + (i === node.table.body.length - 2 ? ruleGap(block) : 0),
     },
     alignment: "right",
-    margin: [140, spaceBefore(block, 4), 0, 0],
+    margin: [full ? 0 : 140, spaceBefore(block, 4), 0, 0],
   };
 }
 
