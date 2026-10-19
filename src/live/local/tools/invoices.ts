@@ -152,7 +152,7 @@ async function requireNumberUnused(db: Db, number: string): Promise<void> {
   if ((row?.n ?? 0) > 0) throw new Error(`Refused: number ${JSON.stringify(number)} has already been used (invoice or credit note). Nothing was issued.`);
 }
 
-function representativeVatRate(lines: PricedInvoiceLine[], netTotal: number, vatTotal: number): number {
+export function representativeVatRate(lines: PricedInvoiceLine[], netTotal: number, vatTotal: number): number {
   if (lines.length > 0) return lines[0].vat_rate;
   return netTotal > 0 ? roundToCents((vatTotal / netTotal) * 100) : 0;
 }

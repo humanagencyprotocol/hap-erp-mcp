@@ -19,6 +19,7 @@ import {
   list_credit_notes,
 } from "./tools/invoices.js";
 import { load_simulation, clear_simulation } from "./tools/simulation.js";
+import { get_document } from "./tools/documents.js";
 
 /** Tools that change the ERP — the ones the gateway issues a ticket for. */
 export const CHANGE_TOOLS = new Set([
@@ -52,6 +53,7 @@ async function runTool(db: Db, name: string, args: Record<string, any>): Promise
     case "list_invoices": return list_invoices(db, args);
     case "get_credit_note": return get_credit_note(db, args);
     case "list_credit_notes": return list_credit_notes(db, args);
+    case "get_document": return get_document(db, args);
     case "load_simulation": return load_simulation(db, args);
     case "clear_simulation": return clear_simulation(db, args);
     default: throw new Error(`Unknown tool: ${name}`);

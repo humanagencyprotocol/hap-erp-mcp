@@ -142,7 +142,7 @@ function validatePaymentTermDays(value: unknown): number {
   return value as number;
 }
 
-async function requireInvoiceRow(db: Db, idOrNumber: string): Promise<InvoiceRow> {
+export async function requireInvoiceRow(db: Db, idOrNumber: string): Promise<InvoiceRow> {
   const byId = await db.get<InvoiceRow>("SELECT * FROM invoices WHERE id = ?", [idOrNumber]);
   if (byId) return byId;
   const byNumber = await db.get<InvoiceRow>("SELECT * FROM invoices WHERE number = ?", [idOrNumber]);

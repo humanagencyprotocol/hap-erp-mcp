@@ -28,7 +28,7 @@ afterEach(async () => { await db.close(); rmSync(dbPath, { force: true }); });
 describe("nothing the working agent sees reveals the simulation", () => {
   it("tool names, descriptions and argument descriptions", () => {
     const working = TOOL_DEFINITIONS.filter((t) => t.name !== "load_simulation" && t.name !== "clear_simulation");
-    expect(working.length).toBe(18);
+    expect(working.length).toBe(19);
     expect(JSON.stringify(working)).not.toMatch(LEAK);
   });
 

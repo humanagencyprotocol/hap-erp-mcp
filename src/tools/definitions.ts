@@ -1,6 +1,7 @@
 /** The MCP tool surface — kept in its own module so tests can read it without starting the server. */
 import { SIMULATION_PACKAGE_SCHEMA } from "../simulation-package-schema.js";
 import { SIMULATION_PACKAGE_GUIDE } from "../simulation-package-guide.js";
+import { DOCUMENT_OUTPUT_SCHEMA } from "../live/local/definitions.js";
 const TICKET_FIELD = {
   type: "string" as const,
   description: "Authorization reference for this call, set by the governing gateway — agents do not set this.",
@@ -288,6 +289,21 @@ export const TOOL_DEFINITIONS = [
       },
       required: [],
     },
+  },
+  {
+    name: "get_document",
+    description:
+      "Read an issued invoice or credit note as a PDF document: filename, content type, base64 content and the " +
+      "sha256 fingerprint of the PDF bytes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["invoice-pdf", "credit-note-pdf"], description: "Which document to read" },
+        id: { type: "string", description: "Invoice or credit note ID (or number)" },
+      },
+      required: ["kind", "id"],
+    },
+    outputSchema: DOCUMENT_OUTPUT_SCHEMA,
   },
 
   // --- Changes ---

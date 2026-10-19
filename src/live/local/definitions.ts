@@ -43,7 +43,7 @@ const PREVIEW_DOCUMENT_DATE_FIELD = {
     "accepts any date — a preview may show the document as it would print on a past, present, or future date.",
 };
 
-const DOCUMENT_OUTPUT_SCHEMA = {
+export const DOCUMENT_OUTPUT_SCHEMA = {
   type: "object",
   title: "Document",
   properties: {
