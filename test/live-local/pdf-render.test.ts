@@ -151,3 +151,30 @@ describe("renderInvoiceDocument", () => {
     expect(second.equals(first)).toBe(true);
   });
 });
+
+describe("spacing comes from the template (v3), older templates unchanged", () => {
+  const vars = () => buildViewModel({
+    company: MUSTER_COMPANY, customer: { name: "Test", addressLines: ["Viktorgasse 1", "1040 Wien"] },
+    documentKind: "invoice", number: "T-1", issuedAt: new Date("2026-10-19"),
+    servicePeriod: { from: "2026-10-19", to: "2026-10-19" }, lines: [baseLine],
+    netTotal: 9000, vatTotal: 1800, grossTotal: 10800, taxMode: "normal", vatRate: 20,
+    invoiceOnly: { paymentTermDays: 14, dueDate: new Date("2026-11-02") },
+  });
+  const table = (tpl: Parameters<typeof resolveTemplateBlocks>[0]) =>
+    (resolveTemplateBlocks(tpl, vars()).content as any[]).find((b) => b?.table?.headerRows === 1);
+
+  it("v3 (default) declares wider rows and fixed numeric column widths", () => {
+    const t = table(DEFAULT_TEMPLATE);
+    expect(t.layout.paddingTop()).toBe(6);
+    expect(t.table.widths).toEqual([22, "*", 58, 78, 78]);
+  });
+
+  it("v2 keeps its old spacing — no key, the old fallback", async () => {
+    const { loadTemplateFile } = await import("../../src/live/local/template.js");
+    const v2 = loadTemplateFile(new URL("../../templates/rechnung-de.v2.json", import.meta.url).pathname);
+    const t = table(v2);
+    expect(t.layout.paddingTop()).toBe(3);
+    expect(t.table.widths).toEqual(["auto", "*", "auto", "auto", "auto"]);
+    expect(t.margin).toEqual([0, 4, 0, 0]);
+  });
+});

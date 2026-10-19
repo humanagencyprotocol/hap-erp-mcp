@@ -140,14 +140,27 @@ function renderHeading(block: any, vars: Record<string, unknown>, texts: Record<
   return { text: resolveText(block.text, vars, texts), fontSize: 14, bold: true, margin: [0, 10, 0, 4] };
 }
 
+/**
+ * Layout spacing comes from the TEMPLATE (in pt), never fixed here: a block may
+ * declare `space_before` (gap above it) and, for tables, `row_padding` (space
+ * above and below each row's text). Absent → the values every template had
+ * before these keys existed, so older templates render byte-identically.
+ */
+function spaceBefore(block: any, fallback: number): number {
+  return typeof block.space_before === "number" ? block.space_before : fallback;
+}
+function rowPadding(block: any, fallback: number): number {
+  return typeof block.row_padding === "number" ? block.row_padding : fallback;
+}
+
 function renderParagraph(block: any, vars: Record<string, unknown>, texts: Record<string, string>) {
-  return { text: resolveText(block.text, vars, texts), margin: [0, 2, 0, 2] };
+  return { text: resolveText(block.text, vars, texts), margin: [0, spaceBefore(block, 2), 0, 2] };
 }
 
 function renderLinesTable(block: any, vars: Record<string, unknown>, texts: Record<string, string>) {
   const rowsPath: string = block.rows;
   const items = (get(vars, rowsPath) as Record<string, unknown>[]) ?? [];
-  const columns: Array<{ head: string; value: string; width?: string; align?: string }> = block.columns;
+  const columns: Array<{ head: string; value: string; width?: string | number; align?: string }> = block.columns;
 
   const header = columns.map((c) => ({
     text: resolveText(c.head, vars, texts),
@@ -172,10 +185,10 @@ function renderLinesTable(block: any, vars: Record<string, unknown>, texts: Reco
       hLineColor: (i: number) => (i === 1 ? BLACK : LIGHT),
       paddingLeft: () => 2,
       paddingRight: () => 2,
-      paddingTop: () => 3,
-      paddingBottom: () => 3,
+      paddingTop: () => rowPadding(block, 3),
+      paddingBottom: () => rowPadding(block, 3),
     },
-    margin: [0, 4, 0, 0],
+    margin: [0, spaceBefore(block, 4), 0, 0],
   };
 }
 
@@ -193,11 +206,11 @@ function renderTotals(block: any, vars: Record<string, unknown>, texts: Record<s
       hLineColor: () => BLACK,
       paddingLeft: () => 2,
       paddingRight: () => 2,
-      paddingTop: () => 1,
-      paddingBottom: () => 1,
+      paddingTop: () => rowPadding(block, 1),
+      paddingBottom: () => rowPadding(block, 1),
     },
     alignment: "right",
-    margin: [140, 4, 0, 0],
+    margin: [140, spaceBefore(block, 4), 0, 0],
   };
 }
 
