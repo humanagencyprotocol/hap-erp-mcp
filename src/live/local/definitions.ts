@@ -131,7 +131,8 @@ const CUSTOMER_TOOL_DEFINITIONS = [
     name: "find_customers",
     description:
       "Search this company's own customers by name or email, or find one exactly by VAT ID (`uid`) or CRM contact " +
-      "(`crm_contact_id`) — check this before create_customer: a VAT ID or CRM contact can belong to only one customer.",
+      "(`crm_contact_id`) — check this before create_customer: a VAT ID or CRM contact can belong to only one customer. " +
+      "Each result carries `tax_mode`, `tax_mode_label` and `vies_status` as get_customer does.",
     inputSchema: {
       type: "object",
       properties: {
@@ -146,8 +147,10 @@ const CUSTOMER_TOOL_DEFINITIONS = [
   {
     name: "get_customer",
     description:
-      "Get a single customer (name, address, country, VAT ID, email, CRM contact, revision, last VIES check). " +
-      "With `revision`, returns that older revision's content.",
+      "Get a single customer (name, address, country, VAT ID, email, CRM contact, revision, last VIES check as " +
+      "`vies` and `vies_status`), plus `tax_mode` / `tax_mode_label`: the tax treatment a new invoice to this customer " +
+      "would get now. A reverse-charge invoice is issued only if `vies_status` is \"valid\". " +
+      "With `revision`, returns that older revision's content (no VIES result is kept for old revisions).",
     inputSchema: {
       type: "object",
       properties: {

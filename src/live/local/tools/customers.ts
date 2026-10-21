@@ -22,7 +22,7 @@
 import { randomUUID } from "crypto";
 import type { Db } from "../../../db.js";
 import type { LocalCtx } from "./invoices.js";
-import { deriveTaxMode } from "../tax.js";
+import { deriveTaxMode, type TaxMode } from "../tax.js";
 import { checkVatIdFormat, isViesCountry, normaliseVatId, refuseIfBadVatIdFormat, type VatIdFormat } from "../vat-id.js";
 import {
   notApplicable, notChecked, viesClientFromEnv, PREVIEW_VIES_TIMEOUT_MS, type ViesClient, type ViesResult,
@@ -60,8 +60,38 @@ export interface LocalCustomerView {
   crm_contact_id: string | null;
   revision: number;
   vies: ViesResult | null;
+  /** The stored VIES status, flat (null = never checked / no VAT ID) — for card checks. */
+  vies_status: ViesResult["status"] | null;
+  /**
+   * Tax treatment a new invoice to this customer would get now — the same
+   * deriveTaxMode create_invoice uses. Set whenever the tool runs with the
+   * company file (every MCP call); absent only for CLI output.
+   */
+  tax_mode?: TaxMode;
+  tax_mode_label?: string;
   created_at: string;
   updated_at: string | null;
+}
+
+/** Human-readable labels for tax-mode codes. */
+export const TAX_MODE_LABELS: Readonly<Record<TaxMode, string>> = {
+  normal: "Normal VAT",
+  reverse_charge: "Reverse charge",
+  kleinunternehmer: "Small-business exemption (Kleinunternehmer)",
+};
+
+function taxModeFor(ctx: LocalCtx, country: string, uid: string | null): TaxMode {
+  return deriveTaxMode({
+    vatMode: ctx.company.vat_mode, homeCountryCode: ctx.company.address.country_code,
+    customerCountryCode: country, customerUid: uid,
+  });
+}
+
+/** Adds tax_mode + label (when the company file is at hand). */
+function withTaxMode(view: LocalCustomerView, ctx?: LocalCtx): LocalCustomerView {
+  if (!ctx) return view;
+  const tax_mode = taxModeFor(ctx, view.country, view.uid);
+  return { ...view, tax_mode, tax_mode_label: TAX_MODE_LABELS[tax_mode] };
 }
 
 /** The content of one revision — exactly what local_master_revisions stores. */
@@ -86,7 +116,7 @@ function toView(row: LocalCustomer): LocalCustomerView {
   return {
     id: row.id, name: row.name, address_lines: JSON.parse(row.address_lines), country: row.country, uid: row.uid,
     email: row.email, crm_contact_id: row.crm_contact_id ?? null, revision: row.revision ?? 1, vies: viesOf(row),
-    created_at: row.created_at, updated_at: row.updated_at ?? null,
+    vies_status: row.vies_status ?? null, created_at: row.created_at, updated_at: row.updated_at ?? null,
   };
 }
 
@@ -108,7 +138,7 @@ async function writeRevision(
 
 // --- Reads ---
 
-export async function find_customers(db: Db, args: Record<string, any>): Promise<LocalCustomerView[]> {
+export async function find_customers(db: Db, args: Record<string, any>, ctx?: LocalCtx): Promise<LocalCustomerView[]> {
   const { query, limit = 50 } = args;
   const conditions: string[] = [];
   const params: any[] = [];
@@ -128,13 +158,13 @@ export async function find_customers(db: Db, args: Record<string, any>): Promise
     const uid = normaliseVatId(args.uid);
     rows = rows.filter((r) => r.uid !== null && normaliseVatId(r.uid) === uid);
   }
-  return rows.slice(0, limit).map(toView);
+  return rows.slice(0, limit).map((r) => withTaxMode(toView(r), ctx));
 }
 
-export async function get_customer(db: Db, args: Record<string, any>): Promise<LocalCustomerView> {
+export async function get_customer(db: Db, args: Record<string, any>, ctx?: LocalCtx): Promise<LocalCustomerView> {
   const row = await requireLocalCustomer(db, args.id);
   const wanted = args.revision;
-  if (wanted === undefined || wanted === null || wanted === row.revision) return toView(row);
+  if (wanted === undefined || wanted === null || wanted === row.revision) return withTaxMode(toView(row), ctx);
   if (!Number.isInteger(wanted) || wanted < 1) throw new Error(`revision must be a positive integer, got ${JSON.stringify(wanted)}`);
   const rev = await db.get<{ content: string; created_at: string }>(
     `SELECT content, created_at FROM local_master_revisions WHERE entity = 'customer' AND entity_id = ? AND revision = ?`,
@@ -144,10 +174,10 @@ export async function get_customer(db: Db, args: Record<string, any>): Promise<L
   const content = JSON.parse(rev.content) as CustomerRevisionContent;
   // An old revision: content from its snapshot. The VIES result is only kept
   // for the current revision, so an old one carries none.
-  return {
+  return withTaxMode({
     id: row.id, ...content, crm_contact_id: content.crm_contact_id ?? null, email: content.email ?? null,
-    revision: wanted, vies: null, created_at: row.created_at, updated_at: rev.created_at,
-  };
+    revision: wanted, vies: null, vies_status: null, created_at: row.created_at, updated_at: rev.created_at,
+  }, ctx);
 }
 
 export async function requireLocalCustomer(db: Db, id: string): Promise<LocalCustomer> {
@@ -337,7 +367,7 @@ export async function create_customer(db: Db, args: Record<string, any>, ctx: Cu
       name: c.name, address_lines: c.address_lines, country: c.country, uid, email: c.email, crm_contact_id: c.crm_contact_id,
     }, ticketId, at);
   });
-  return toView(await requireLocalCustomer(db, id));
+  return withTaxMode(toView(await requireLocalCustomer(db, id)), ctx);
 }
 
 const TAX_FIELDS = ["name", "address_lines", "country", "uid"] as const;
@@ -380,7 +410,7 @@ export async function update_customer(db: Db, args: Record<string, any>, ctx: Cu
     );
     await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
   });
-  return toView(await requireLocalCustomer(db, row.id));
+  return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
 }
 
 function sameTaxData(row: LocalCustomer, t: TaxShape & { uid: string | null }): boolean {
@@ -435,7 +465,7 @@ export async function update_customer_tax_data(db: Db, args: Record<string, any>
     );
     await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
   });
-  return toView(await requireLocalCustomer(db, row.id));
+  return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
 }
 
 // --- Card-only preview reads (§3.4) ---
@@ -483,11 +513,9 @@ export async function preview_customer_change(db: Db, args: Record<string, any>,
   if (shape.country !== current.country) changed.push("country");
   if (uid !== (current.uid === null ? null : normaliseVatId(current.uid))) changed.push("uid");
 
-  const taxMode = (country: string, customerUid: string | null) =>
-    deriveTaxMode({
-      vatMode: ctx.company.vat_mode, homeCountryCode: ctx.company.address.country_code,
-      customerCountryCode: country, customerUid,
-    });
+  const taxMode = (country: string, customerUid: string | null) => taxModeFor(ctx, country, customerUid);
+  const now = taxMode(current.country, current.uid);
+  const after = taxMode(shape.country, uid);
 
   const invoices = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_invoices WHERE customer_id = ?`, [row.id]);
   const creditNotes = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_credit_notes WHERE customer_id = ?`, [row.id]);
@@ -507,7 +535,7 @@ export async function preview_customer_change(db: Db, args: Record<string, any>,
     revision: row.revision,
     changed,
     uid_or_country_changed: changed.includes("uid") || changed.includes("country"),
-    tax_mode: { now: taxMode(current.country, current.uid), after: taxMode(shape.country, uid) },
+    tax_mode: { now, after, now_label: TAX_MODE_LABELS[now], after_label: TAX_MODE_LABELS[after] },
     issued_documents: { invoices: invoices?.n ?? 0, credit_notes: creditNotes?.n ?? 0, last_number: last?.number ?? null },
     open_quotes: openQuotes?.n ?? 0,
     vat_check: uid ? await vatCheck(db, ctx, shape.country, uid, row.id) : null,
@@ -604,8 +632,8 @@ export async function listCustomersForCli(db: Db): Promise<LocalCustomerView[]> 
 
 /** Handlers for dispatch.ts (customer area). */
 export const CUSTOMER_TOOL_HANDLERS = {
-  find_customers: (db: Db, args: Record<string, any>) => find_customers(db, args),
-  get_customer: (db: Db, args: Record<string, any>) => get_customer(db, args),
+  find_customers: (db: Db, args: Record<string, any>, ctx: LocalCtx) => find_customers(db, args, ctx),
+  get_customer: (db: Db, args: Record<string, any>, ctx: LocalCtx) => get_customer(db, args, ctx),
   create_customer: (db: Db, args: Record<string, any>, ctx: LocalCtx) => create_customer(db, args, ctx),
   update_customer: (db: Db, args: Record<string, any>, ctx: LocalCtx) => update_customer(db, args, ctx),
   update_customer_tax_data: (db: Db, args: Record<string, any>, ctx: LocalCtx) => update_customer_tax_data(db, args, ctx),
