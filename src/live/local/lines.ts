@@ -9,7 +9,12 @@
  *   without the list price it points at).
  * - `resolveLocalLines(db, lines)` — the same shape check, plus the catalogue
  *   link: a line with `item_id` must name an existing, active item; the line
- *   then carries that item's `list_price` and `revision` at this moment.
+ *   then carries that item's `list_price` and `revision` at this moment. A
+ *   line may pin `item_revision`: if the item has moved to another revision
+ *   since, the line is refused naming both (a price change between approval
+ *   and execution cannot slip through). Credit notes pass
+ *   `{ allowInactive: true }`: they correct an issued invoice, so a
+ *   deactivated item must not block them; new invoices and quotes refuse it.
  *   Description, unit_price and vat_rate stay exactly as given — the item
  *   never fills or overrides them, and a deviation from the item is not
  *   refused (the governing layer shows it).
@@ -19,7 +24,7 @@
  */
 import type { InvoiceLineInput } from "../../money.js";
 import type { Db } from "../../db.js";
-import { requireActiveItemForLine } from "./tools/items.js";
+import { requireItemForLine } from "./tools/items.js";
 
 export interface LocalLine extends InvoiceLineInput {
   unit: string;
@@ -29,12 +34,12 @@ export interface LocalLine extends InvoiceLineInput {
 }
 
 /** Shape check shared by both entry points; returns the raw item_id per line. */
-function parseLines(lines: unknown): Array<{ line: LocalLine; itemId: string | null }> {
+function parseLines(lines: unknown): Array<{ line: LocalLine; itemId: string | null; pinnedRevision: number | null }> {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new Error("lines must be a non-empty array of { description, qty, unit_price, vat_rate, unit?, item_id? }");
   }
   return lines.map((line, i) => {
-    const { description, qty, unit_price, vat_rate, unit, item_id } = (line ?? {}) as Record<string, any>;
+    const { description, qty, unit_price, vat_rate, unit, item_id, item_revision } = (line ?? {}) as Record<string, any>;
     if (typeof description !== "string" || !description.trim()) throw new Error(`lines[${i}].description is required`);
     if (typeof qty !== "number" || !Number.isFinite(qty) || qty <= 0) throw new Error(`lines[${i}].qty must be a positive number`);
     if (typeof unit_price !== "number" || !Number.isFinite(unit_price) || unit_price < 0) throw new Error(`lines[${i}].unit_price must be a number >= 0`);
@@ -43,9 +48,14 @@ function parseLines(lines: unknown): Array<{ line: LocalLine; itemId: string | n
     if (item_id !== undefined && item_id !== null && (typeof item_id !== "string" || !item_id.trim())) {
       throw new Error(`lines[${i}].item_id must be a non-empty string`);
     }
+    if (item_revision !== undefined && item_revision !== null) {
+      if (!Number.isInteger(item_revision) || item_revision < 1) throw new Error(`lines[${i}].item_revision must be a positive integer`);
+      if (typeof item_id !== "string") throw new Error(`lines[${i}].item_revision needs item_id`);
+    }
     return {
       line: { item_id: null, description, qty, unit_price, vat_rate, unit: unit ?? "Stk.", list_price: null, item_revision: null },
       itemId: typeof item_id === "string" ? item_id : null,
+      pinnedRevision: typeof item_revision === "number" ? item_revision : null,
     };
   });
 }
@@ -65,20 +75,31 @@ export function validateLocalLines(lines: unknown): LocalLine[] {
 }
 
 /**
- * Shape check + catalogue link for lines of a NEW document. A line with
- * `item_id` is refused when the item does not exist or is inactive; otherwise
- * it carries the item's current list_price and revision.
+ * Shape check + catalogue link for lines of a document. A line with
+ * `item_id` is refused when the item does not exist, is inactive (unless
+ * `allowInactive`), or is not at the pinned `item_revision`; otherwise it
+ * carries the item's current list_price and revision.
  */
-export async function resolveLocalLines(db: Db, lines: unknown): Promise<LocalLine[]> {
+export interface ResolveLinesOptions {
+  /** Credit notes only: a line may reference an inactive item. */
+  allowInactive?: boolean;
+}
+
+export async function resolveLocalLines(db: Db, lines: unknown, options: ResolveLinesOptions = {}): Promise<LocalLine[]> {
   const parsed = parseLines(lines);
   const out: LocalLine[] = [];
   for (let i = 0; i < parsed.length; i++) {
-    const { line, itemId } = parsed[i];
+    const { line, itemId, pinnedRevision } = parsed[i];
     if (itemId === null) {
       out.push(line);
       continue;
     }
-    const item = await requireActiveItemForLine(db, itemId, i);
+    const item = await requireItemForLine(db, itemId, i, { allowInactive: options.allowInactive === true });
+    if (pinnedRevision !== null && pinnedRevision !== item.revision) {
+      throw new Error(
+        `Refused: lines[${i}]: Item ${item.id} is at revision ${item.revision}; this request is for revision ${pinnedRevision}.`
+      );
+    }
     out.push({ ...line, item_id: item.id, list_price: item.list_price, item_revision: item.revision });
   }
   return out;

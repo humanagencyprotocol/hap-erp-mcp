@@ -7,7 +7,7 @@
  * (docs/local-production-contract.md §9).
  */
 import { QUOTE_TOOL_DEFINITIONS } from "./definitions-quotes.js";
-import { ITEM_TOOL_DEFINITIONS, LINE_ITEM_ID_FIELD } from "./definitions-items.js";
+import { ITEM_TOOL_DEFINITIONS, LINE_ITEM_ID_FIELD, LINE_ITEM_REVISION_FIELD } from "./definitions-items.js";
 
 export interface LocalToolDefinition {
   name: string;
@@ -25,6 +25,7 @@ const LOCAL_LINE_SCHEMA = {
   type: "object" as const,
   properties: {
     item_id: LINE_ITEM_ID_FIELD,
+    item_revision: LINE_ITEM_REVISION_FIELD,
     description: { type: "string", description: "Line description" },
     qty: { type: "number", description: "Quantity (positive)" },
     unit: { type: "string", description: "Unit label (optional, default \"Stk.\")" },

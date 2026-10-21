@@ -485,7 +485,8 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   let totals: ReturnType<typeof computeLineTotals>;
   let linesWithUnit: LocalLine[];
   if (lines !== undefined) {
-    linesWithUnit = await resolveLocalLines(db, lines);
+    // A credit note corrects an issued invoice — an item deactivated since must not block it.
+    linesWithUnit = await resolveLocalLines(db, lines, { allowInactive: true });
     totals = computeLineTotals(linesWithUnit);
     // A credit note shares the invoice's tax treatment — its lines too.
     refuseIfVatContradictsTaxMode(linesWithUnit, invoice.tax_mode as TaxMode, "credit note");

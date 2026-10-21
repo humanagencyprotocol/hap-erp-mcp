@@ -90,14 +90,17 @@ function itemLabel(item: { sku: string | null; name: string }): string {
 }
 
 /**
- * For lines.ts: the item a NEW document line links to — must exist and be
- * active. Old documents keep pointing at inactive items; only new lines are
- * refused (contract §5.2).
+ * For lines.ts: the item a document line links to — must exist, and be
+ * active unless `allowInactive` (credit notes correct an issued invoice, so
+ * deactivation must not block them). New invoices and quotes refuse an
+ * inactive item (contract §5.2).
  */
-export async function requireActiveItemForLine(db: Db, id: string, index: number): Promise<LocalItem> {
+export async function requireItemForLine(
+  db: Db, id: string, index: number, options: { allowInactive: boolean }
+): Promise<LocalItem> {
   const row = await findItemRow(db, id);
   if (!row) throw new Error(`Refused: lines[${index}].item_id: unknown item ${id}.`);
-  if (row.active !== 1) {
+  if (row.active !== 1 && !options.allowInactive) {
     throw new Error(`Refused: lines[${index}]: Item ${itemLabel(row)} is inactive — it cannot go on a new document.`);
   }
   return toItem(row);

@@ -176,7 +176,7 @@ describe("lines with item_id (contract §5.3)", () => {
     expect(next.lines[0]).toMatchObject({ list_price: 150, item_revision: 2, vat_rate: 20 });
   });
 
-  it("an inactive item is refused on a new invoice / credit note / preview, nothing issued; old documents still read", async () => {
+  it("an inactive item is refused on a new invoice / preview, nothing issued; old documents still read", async () => {
     ({ db, ctx, dataDir } = await freshLocalCtx("item-inactive"));
     const cust = await seedAtCustomer(db);
     const item = await create_item(db, CONSULTING);
@@ -187,10 +187,56 @@ describe("lines with item_id (contract §5.3)", () => {
     const args = { customer_id: cust.id, number: "2026-0104", ...INVOICE_ARGS_BASE, lines: [line(item.id, 120)], net_total: 240 };
     await expect(create_invoice(db, args, ctx)).rejects.toThrow("Refused: lines[0]: Item B-01 is inactive — it cannot go on a new document.");
     await expect(preview_invoice(db, args, ctx)).rejects.toThrow(/Item B-01 is inactive/);
-    await expect(create_credit_note(db, { invoice_id: invoice.id, number: "2026-0105", document_date: INVOICE_ARGS_BASE.document_date,
-      credit_total: 240, currency: "EUR", reason: "x", lines: [line(item.id, 120)] }, ctx)).rejects.toThrow(/Item B-01 is inactive/);
     expect(await db.all("SELECT number FROM local_numbers ORDER BY number")).toEqual([{ number: "2026-0103" }]);
     expect((await get_invoice(db, { id: invoice.id }) as any).lines[0].item_id).toBe(item.id);
+  });
+
+  it("a credit note MAY reference an inactive item — it corrects an issued invoice", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("item-inactive-credit"));
+    const cust = await seedAtCustomer(db);
+    const item = await create_item(db, CONSULTING);
+    const invoice: any = await create_invoice(db, { customer_id: cust.id, number: "2026-0110", ...INVOICE_ARGS_BASE,
+      lines: [line(item.id, 120)], net_total: 240 }, ctx);
+    await update_item(db, { id: item.id, revision: 1, active: false });
+
+    const credit: any = await create_credit_note(db, { invoice_id: invoice.id, number: "2026-0111",
+      document_date: INVOICE_ARGS_BASE.document_date, credit_total: 240, currency: "EUR", reason: "Storno",
+      lines: [line(item.id, 120)] }, ctx);
+    expect(credit.lines[0]).toMatchObject({ item_id: item.id, list_price: 120, item_revision: 2 });
+    // …while new invoices still refuse it.
+    await expect(create_invoice(db, { customer_id: cust.id, number: "2026-0112", ...INVOICE_ARGS_BASE,
+      lines: [line(item.id, 120)], net_total: 240 }, ctx)).rejects.toThrow(/Item B-01 is inactive/);
+    // An unknown item stays refused on a credit note.
+    await expect(create_credit_note(db, { invoice_id: invoice.id, number: "2026-0113",
+      document_date: INVOICE_ARGS_BASE.document_date, credit_total: 240, currency: "EUR", reason: "x",
+      lines: [line("missing", 120)] }, ctx)).rejects.toThrow(/unknown item missing/);
+  });
+
+  it("a line pinned to an item revision is refused once the item moved on, naming both; nothing issued", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("item-pin"));
+    const cust = await seedAtCustomer(db);
+    const item = await create_item(db, CONSULTING);
+    const [listed] = await list_items(db, {});
+    expect(listed.revision).toBe(1); // the agent reads the revision to pin it
+    const pinned = { ...line(item.id, 120), item_revision: listed.revision };
+    const args = { customer_id: cust.id, number: "2026-0120", ...INVOICE_ARGS_BASE, lines: [pinned], net_total: 240 };
+
+    // Approved at revision 1 — then the price changes before execution.
+    await update_item_price(db, { id: item.id, revision: 1, list_price: 150, vat_rate: 20 });
+    const msg = `Refused: lines[0]: Item ${item.id} is at revision 2; this request is for revision 1.`;
+    await expect(create_invoice(db, args, ctx)).rejects.toThrow(msg);
+    await expect(preview_invoice(db, args, ctx)).rejects.toThrow(msg);
+    expect(await db.all("SELECT * FROM local_numbers")).toEqual([]);
+
+    // Pinned to the current revision → issued, storing that revision and its list price.
+    const ok: any = await create_invoice(db, { ...args, lines: [{ ...pinned, item_revision: 2 }] }, ctx);
+    expect(ok.lines[0]).toMatchObject({ item_revision: 2, list_price: 150, unit_price: 120 });
+  });
+
+  it("item_revision is shape-checked and needs item_id", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("item-pin-shape"));
+    await expect(resolveLocalLines(db, [{ description: "X", qty: 1, unit_price: 1, vat_rate: 20, item_revision: 1 }])).rejects.toThrow(/item_revision needs item_id/);
+    await expect(resolveLocalLines(db, [{ ...line("x", 1), item_revision: 0 }])).rejects.toThrow(/item_revision must be a positive integer/);
   });
 
   it("an unknown item_id is refused", async () => {
