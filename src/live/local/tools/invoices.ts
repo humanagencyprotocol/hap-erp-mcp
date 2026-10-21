@@ -41,7 +41,7 @@ import { archivePath, writeOnce, readAndVerify, sha256 as sha256Buffer } from ".
 import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
-import { requireLocalCustomer, type LocalCustomer } from "./customers.js";
+import { requireLocalCustomer, requireViesValidForReverseCharge, type LocalCustomer } from "./customers.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
 
 export interface LocalCtx {
@@ -371,6 +371,8 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
   // approved preview and the issued document could date-drift apart.
   requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
   await requireNumberUnused(db, prepared.number);
+  // D1 (Andreas, 2026-10-21): reverse charge only with a stored VIES `valid`.
+  if (prepared.taxMode === "reverse_charge") await requireViesValidForReverseCharge(db, prepared.customerId, "invoice");
 
   // Fixed, non-"now" issue instant — the document's own date at UTC midnight
   // — so re-rendering the same request (preview, then issue) is deterministic

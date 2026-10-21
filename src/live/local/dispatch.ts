@@ -12,7 +12,8 @@ import type { Db } from "../../db.js";
 import { resolveLiveCompany, type LiveCompany } from "./company-file.js";
 import { resolveTemplate } from "./template.js";
 import { LOCAL_TOOL_DEFINITIONS } from "./definitions.js";
-import { find_customers, get_customer } from "./tools/customers.js";
+import { CUSTOMER_TOOL_HANDLERS } from "./tools/customers.js";
+import { viesClientFromEnv } from "./vies.js";
 import * as invoices from "./tools/invoices.js";
 import type { LocalCtx } from "./tools/invoices.js";
 import { QUOTE_TOOL_HANDLERS } from "./tools/quotes.js";
@@ -21,8 +22,6 @@ import { ITEM_TOOL_HANDLERS } from "./tools/items.js";
 export type LocalToolHandler = (db: Db, args: Record<string, any>, ctx: LocalCtx) => Promise<unknown>;
 
 const CORE_TOOL_HANDLERS: Readonly<Record<string, LocalToolHandler>> = {
-  find_customers: (db, args) => find_customers(db, args),
-  get_customer: (db, args) => get_customer(db, args),
   create_invoice: invoices.create_invoice,
   preview_invoice: invoices.preview_invoice,
   create_credit_note: invoices.create_credit_note,
@@ -51,6 +50,7 @@ export function mergeHandlerAreas(
 
 const LOCAL_TOOL_HANDLERS = mergeHandlerAreas({
   core: CORE_TOOL_HANDLERS,
+  customers: CUSTOMER_TOOL_HANDLERS,
   quotes: QUOTE_TOOL_HANDLERS,
   items: ITEM_TOOL_HANDLERS,
 });
@@ -88,6 +88,7 @@ export async function callLocalTool(db: Db, name: string, args: Record<string, a
         `Available tools: ${LOCAL_TOOL_NAMES.join(", ")}.`
     );
   }
-  const ctx = buildLocalCtx(env);
+  // The customer tools also get the VIES client (the one outside call, vies.ts).
+  const ctx = { ...buildLocalCtx(env), vies: viesClientFromEnv(env) };
   return handler(db, args, ctx);
 }

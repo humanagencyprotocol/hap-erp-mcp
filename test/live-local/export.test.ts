@@ -5,8 +5,8 @@ import { join } from "path";
 import type { Db } from "../../src/db.js";
 import type { LocalCtx } from "../../src/live/local/tools/invoices.js";
 import { create_invoice, create_credit_note } from "../../src/live/local/tools/invoices.js";
-import { exportInvoicesToDir } from "../../src/live/local/export.js";
-import { freshLocalCtx, cleanupDataDir, seedAtCustomer, INVOICE_ARGS_BASE, TODAY } from "./fixtures.js";
+import { exportInvoicesToDir, collectExportRows } from "../../src/live/local/export.js";
+import { freshLocalCtx, cleanupDataDir, seedAtCustomer, changeCustomerTaxData, INVOICE_ARGS_BASE, TODAY } from "./fixtures.js";
 
 let db: Db;
 let ctx: LocalCtx;
@@ -71,5 +71,31 @@ describe("export-invoices", () => {
     outDir = mkdtempSync(join(tmpdir(), "erp-local-export-out2-"));
     const count = await exportInvoicesToDir(db, "2020-01", outDir);
     expect(count).toBe(0);
+  });
+
+  it("R1: prints each document's customer as issued (snapshot), not the customer's current data", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("export-snapshot"));
+    const cust = await seedAtCustomer(db);
+    const invoice = await create_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0001", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    );
+    await changeCustomerTaxData(db, cust.id, {
+      name: "Drautal AG", address_lines: ["Bahnhofstraße 1", "9500 Villach"], country: "AT", uid: "ATU87654321",
+    }, ctx);
+    await create_credit_note(db, { invoice_id: invoice.id, number: "2026-G0001", document_date: TODAY, credit_total: 100, currency: "EUR", reason: "Storno" }, ctx);
+    await create_invoice(
+      db,
+      { customer_id: cust.id, number: "2026-0002", ...INVOICE_ARGS_BASE, lines: [{ description: "X", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100 },
+      ctx
+    );
+
+    const rows = await collectExportRows(db, new Date(invoice.issued_at).toISOString().slice(0, 7));
+    const by = Object.fromEntries(rows.map((r) => [r.number, r]));
+    expect(by["2026-0001"]).toMatchObject({ customer: "Drautal Maschinenbau GmbH", uid: "ATU12345678", country: "AT" });
+    // The credit note corrects the old invoice: it carries that invoice's snapshot.
+    expect(by["2026-G0001"]).toMatchObject({ customer: "Drautal Maschinenbau GmbH", uid: "ATU12345678" });
+    expect(by["2026-0002"]).toMatchObject({ customer: "Drautal AG", uid: "ATU87654321" });
   });
 });

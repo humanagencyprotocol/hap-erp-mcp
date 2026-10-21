@@ -5,7 +5,7 @@
  *   erp-mcp export                              everything needed to line up trigger → ticket → effect (changes + refusals)
  *   erp-mcp scenario next <file>                hand over the next request, record when
  *   erp-mcp scenario status <file>              which requests were handed over, which are pending
- *   erp-mcp customers add <json>                live/local mode: add one customer — the AI has no tool to do this
+ *   erp-mcp customers add <json>                live/local mode: add one customer (revision 1, no VIES check — the person typing it decides)
  *   erp-mcp customers list                      live/local mode: list customers
  *   erp-mcp customers import <file>              live/local mode: import customers from a JSON array file, all-or-nothing
  *   erp-mcp export-invoices --month YYYY-MM --out <dir>   live/local mode: CSV + archived PDFs for the tax advisor

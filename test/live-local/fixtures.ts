@@ -5,7 +5,8 @@ import { rmSync, mkdirSync, cpSync, readFileSync } from "fs";
 import { createLocalDb } from "../../src/live/local/db.js";
 import { parseLiveCompany, type LiveCompany } from "../../src/live/local/company-file.js";
 import { loadTemplateFile, DEFAULT_TEMPLATE_PATH } from "../../src/live/local/template.js";
-import { addCustomer } from "../../src/live/local/tools/customers.js";
+import { addCustomer, get_customer, update_customer_tax_data, type CustomerCtx } from "../../src/live/local/tools/customers.js";
+import type { ViesClient, ViesQuery, ViesResult } from "../../src/live/local/vies.js";
 import { todayInTimezone } from "../../src/live/local/date.js";
 import type { LocalCtx } from "../../src/live/local/tools/invoices.js";
 import type { Db } from "../../src/db.js";
@@ -61,14 +62,17 @@ export async function seedAtCustomerNoUid(db: Db) {
   });
 }
 
+/** An EU customer for reverse charge — its VAT ID marked confirmed by VIES (D1). */
 export async function seedDeCustomer(db: Db) {
-  return addCustomer(db, {
+  const c = await addCustomer(db, {
     name: "Kessler Anlagenbau GmbH",
     address_lines: ["Hafenstraße 4", "20457 Hamburg", "Deutschland"],
     country: "DE",
     uid: "DE123456789",
     email: "ap@kessler.example",
   });
+  await markViesValid(db, c.id);
+  return c;
 }
 
 export async function seedDeCustomerNoUid(db: Db) {
@@ -123,16 +127,47 @@ export function local095Requests(): { invoices: Record<string, any>; credit_note
   return JSON.parse(readFileSync(join(LOCAL_095_FIXTURE_DIR, "requests.json"), "utf8"));
 }
 
+// --- VIES stubs (no network in unit tests) ---
+
+/** A VIES client answering from a fixed status per VAT ID (default `valid`); records every query. */
+export function stubVies(
+  answers: Record<string, ViesResult["status"] | "throw"> = {},
+  calls: ViesQuery[] = []
+): ViesClient {
+  return {
+    async check(q) {
+      calls.push(q);
+      const status = answers[q.countryCode + q.vatNumber] ?? "valid";
+      const at = "2026-10-21T09:00:00.000Z";
+      if (status === "not_checked") return { status, reason: "VIES unreachable (stub)", checked_at: at, request_id: null, name: null, address: null };
+      if (status === "valid") return { status, reason: null, checked_at: at, request_id: `REQ-${calls.length}`, name: "STUB NAME", address: "STUB ADDRESS" };
+      if (status === "throw") throw new Error("stub: VIES must not be called");
+      return { status, reason: null, checked_at: at, request_id: null, name: null, address: null };
+    },
+  };
+}
+
+/** The ctx with a VIES client injected — what dispatch passes to the customer tools. */
+export function withVies(ctx: LocalCtx, vies: ViesClient = stubVies()): CustomerCtx {
+  return { ...ctx, vies };
+}
+
+/** Marks a CLI-added customer's VAT ID as confirmed by VIES (D1: reverse charge needs it). */
+export async function markViesValid(db: Db, id: string): Promise<void> {
+  await db.run(
+    `UPDATE local_customers SET vies_status = 'valid', vies_checked_at = '2026-10-21T09:00:00.000Z', vies_request_id = 'REQ-FIXTURE' WHERE id = ?`,
+    [id]
+  );
+}
+
 /**
- * Stand-in for update_customer_tax_data (Part A2) until it exists: replaces
- * the customer's tax data and moves it to the next revision, directly in SQL.
+ * Replaces the customer's tax data through the real tool (update_customer_tax_data),
+ * VIES stubbed as `valid`, at the customer's current revision.
  */
 export async function changeCustomerTaxData(
-  db: Db, id: string, data: { name: string; address_lines: string[]; country: string; uid: string | null }
+  db: Db, id: string, data: { name: string; address_lines: string[]; country: string; uid: string | null }, ctx?: LocalCtx
 ): Promise<void> {
-  await db.run(
-    `UPDATE local_customers SET name = ?, address_lines = ?, country = ?, uid = ?, revision = revision + 1,
-       updated_at = datetime('now') WHERE id = ?`,
-    [data.name, JSON.stringify(data.address_lines), data.country, data.uid, id]
-  );
+  const current = await get_customer(db, { id });
+  const base = ctx ?? { company: MUSTER_COMPANY, template: DEFAULT_TEMPLATE, dataDir: tmpDataDir("unused") };
+  await update_customer_tax_data(db, { id, revision: current.revision, ...data }, withVies(base));
 }

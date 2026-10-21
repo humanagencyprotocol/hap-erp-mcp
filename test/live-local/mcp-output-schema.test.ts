@@ -37,7 +37,7 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), "erp-local-outputschema-"));
   writeFileSync(join(dataDir, "company.json"), JSON.stringify(MUSTER_COMPANY_JSON));
 
-  // Seed a customer directly (the AI has no tool to create one — see customers.test.ts).
+  // Seed a customer directly through the CLI path (no VIES call in this test).
   const dbPath = join(dataDir, "erp-local.sqlite");
   const seedDb = await createLocalDb(dbPath);
   const customer = await addCustomer(seedDb, {
