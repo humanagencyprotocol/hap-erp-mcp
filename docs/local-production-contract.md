@@ -798,3 +798,12 @@ The contract picks a default for each so work can start; changing one is a contr
 | O10 | Checks line gets `not_checked` and `notice` states. | As §7.2 D1. | UI-spec change + HTML mockup + sign-off **before** D's UI code. |
 | O11 | VIES at execution may differ from the card. | Re-check at execution; `invalid` refuses; stored = execution result. | The stored status can differ from what the card showed; it is never `valid` unless VIES said so at execution. |
 | O12 | `cancel_quote`. | Not in 0.10.0 (as the simulator). | A wrong sent quote stays `sent`. |
+
+## 11. Amendments from review (ERP author session, 2026-10-21) — binding
+
+| # | Change | Owner | Test |
+|---|--------|-------|------|
+| AM1 | **VIES on the card is display-only.** The card's `check_vat_id` read carries volatile fields (`checked_at`, `request_id`, status may flip), so it must NOT take part in the AU4 changed-check (proposal hash vs re-read before execution). Generic manifest declaration on the preview read marks it display-only; the card labels it with its time. `create_customer` / `update_customer_tax_data` re-run VIES at execution and store THAT result (O11). | D (declaration + test), A2 (re-check at execution) | gateway: a create_customer approval survives a second VIES call with a new `request_id` and a status flip |
+| AM2 | **Conversion refuses a changed customer.** If the customer's current revision differs from the quote revision's snapshot `customer_revision`, `create_invoice` with `quote_id` is refused, naming both revisions (mirrors `send_quote`). R8 alone is not enough: a quote to a normal-VAT customer must not convert into a reverse-charge invoice. | B | conversion after a customer tax-data change → refused with both revisions |
+| AM3 | **Migration snapshot wording.** For invoices issued before the migration, the archived PDF (write-once, sha-verified) stays the legal original; the `migrated` snapshot is a best-effort copy taken at migration time. Credit notes on pre-migration invoices render the migrated snapshot. | A1 (doc + migration comment) | — |
+| AM4 | **O3 / O5 for Andreas:** the reviewer recommends refusing to ISSUE a reverse-charge invoice unless the customer's last VIES result is `valid` (saving a not-checked customer stays allowed). O5: connector-assigned quote numbers differ from the invoice rule "the number comes with the request" — decision pending with Andreas. | Coordinator | — |
