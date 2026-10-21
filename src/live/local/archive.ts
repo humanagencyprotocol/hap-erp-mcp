@@ -11,14 +11,28 @@
  */
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { createHash } from "crypto";
-import { join } from "path";
+import { join, resolve, relative, isAbsolute, sep } from "path";
 
 export function archiveDir(dataDir: string): string {
   return join(dataDir, "erp-local-archive");
 }
 
+/**
+ * Defence in depth: the numbers are format-checked before this point
+ * (document-number.ts), but a resolved archive path must also stay inside
+ * the archive directory — refused otherwise, before anything is written.
+ */
+export function requireInsideArchive(dataDir: string, path: string): string {
+  const root = resolve(archiveDir(dataDir));
+  const rel = relative(root, resolve(path));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Refused: archive path ${path} is outside the archive directory ${root}. Nothing was issued.`);
+  }
+  return path;
+}
+
 export function archivePath(dataDir: string, year: number, number: string): string {
-  return join(archiveDir(dataDir), String(year), `${number}.pdf`);
+  return requireInsideArchive(dataDir, join(archiveDir(dataDir), String(year), `${number}.pdf`));
 }
 
 /**
@@ -28,7 +42,7 @@ export function archivePath(dataDir: string, year: number, number: string): stri
  * <dataDir>/erp-local-archive/quotes/<year>/<number>-r<revision>.pdf
  */
 export function quoteArchivePath(dataDir: string, year: number, number: string, revision: number): string {
-  return join(archiveDir(dataDir), "quotes", String(year), `${number}-r${revision}.pdf`);
+  return requireInsideArchive(dataDir, join(archiveDir(dataDir), "quotes", String(year), `${number}-r${revision}.pdf`));
 }
 
 export function sha256(buf: Buffer): string {

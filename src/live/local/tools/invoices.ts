@@ -42,6 +42,7 @@ import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, requireViesValidForReverseCharge, type LocalCustomer } from "./customers.js";
+import { requireSafeDocumentNumber } from "../document-number.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
 import {
   requireLocalQuote, requireQuoteRevisionRow, storedLinesAsInput, quoteDocument, type StoredQuoteLine,
@@ -187,9 +188,11 @@ export interface LocalCreditNoteRow {
   ticket_id: string | null;
 }
 
-function validateNumber(value: unknown): string {
+function validateNumber(value: unknown, what: "invoice" | "credit note"): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("number is required (it comes with the request — this connector does not auto-number in live mode).");
-  return value.trim();
+  // The number names the archived PDF: same file-name rule as quotes, checked
+  // before any reservation or archive write (see document-number.ts).
+  return requireSafeDocumentNumber(value, what);
 }
 
 function validateServicePeriod(value: unknown): { from: string; to: string } {
@@ -288,7 +291,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
   const customerRow: CustomerRowWithRevision = await requireLocalCustomer(db, customer_id);
   requireCustomerRevision(customerRow, args.customer_revision);
   const customer = snapshotFromCustomer(customerRow);
-  const number = validateNumber(args.number);
+  const number = validateNumber(args.number, "invoice");
   // Format-only here — both create_invoice and preview_invoice call this;
   // the "must be today" refusal is create_invoice's own, below (see date.ts).
   const documentDate = validateDocumentDate(args.document_date);
@@ -558,7 +561,7 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   const { invoice_id, credit_total, currency, reason, lines } = args;
 
   if (typeof reason !== "string" || !reason.trim()) throw new Error("reason is required");
-  const number = validateNumber(args.number);
+  const number = validateNumber(args.number, "credit note");
   const documentDate = validateDocumentDate(args.document_date);
   requireDocumentDateIsToday(documentDate, ctx.company.timezone);
   await requireNumberUnused(db, number);

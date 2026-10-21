@@ -38,6 +38,7 @@ import { buildViewModel } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer } from "./customers.js";
+import { requireSafeDocumentNumber } from "../document-number.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
 import {
   snapshotFromCustomer,
@@ -118,14 +119,6 @@ export interface StoredQuoteLine {
 
 // --- D2: quote numbers come with the request ---
 
-/**
- * The number names the archived file, so it must be safe as a file name: 1–64
- * letters, digits, ".", "_" or "-", starting and ending with a letter or
- * digit (no spaces, no path separators). The series format itself (e.g.
- * `<PREFIX>-A-YYYY-NNN`) is the brief's, not this connector's.
- */
-const QUOTE_NUMBER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
-
 export function validateQuoteNumber(value: unknown): string {
   if (value === undefined || value === null || value === "") {
     throw new Error(
@@ -133,13 +126,7 @@ export function validateQuoteNumber(value: unknown): string {
         "invoices and credit notes); this connector never assigns one. Nothing was issued."
     );
   }
-  if (typeof value !== "string" || !QUOTE_NUMBER_PATTERN.test(value)) {
-    throw new Error(
-      `Refused: quote number ${JSON.stringify(value)} is malformed — use 1–64 letters, digits, ".", "_" or "-", ` +
-        "starting and ending with a letter or digit. Nothing was issued."
-    );
-  }
-  return value;
+  return requireSafeDocumentNumber(value, "quote");
 }
 
 /** Refuses a number already used by a quote, or by an invoice or credit note (never written, only read). */
