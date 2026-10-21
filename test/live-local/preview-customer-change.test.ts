@@ -83,18 +83,25 @@ describe("D1: reverse charge is issued only with a stored VIES `valid`", () => {
     await expect(create_invoice(db, inv(c.id, "2026-0101", 0), ctx)).rejects.toThrow(/confirm the VAT ID first.*never checked/);
   });
 
-  it("after confirming (VIES valid) the invoice is issued; a later lost confirmation refuses the reverse-charge credit note", async () => {
+  it("after confirming (VIES valid) the invoice is issued; a credit note on it is EXEMPT once VIES is no longer valid, a new invoice is not", async () => {
     ({ db, ctx, dataDir } = await freshLocalCtx("d1-confirm"));
     const c = await create_customer(db, DE, withVies(ctx, stubVies({ DE123456789: "not_checked" })));
-    await update_customer_tax_data(db, { id: c.id, revision: 1, ...DE }, withVies(ctx)); // re-check → valid
+    await update_customer_tax_data(db, { id: c.id, revision: 1, ...DE }, withVies(ctx)); // confirm path: same data, re-check → valid
     const issued = await create_invoice(db, inv(c.id, "2026-0102", 0), ctx);
     expect(issued.tax_mode).toBe("reverse_charge");
 
-    // The customer's address changes and VIES is unreachable at that moment → stored not_checked.
+    // The address changes and VIES is unreachable at that moment → stored not_checked.
     await update_customer_tax_data(db, { id: c.id, revision: 2, ...DE, address_lines: ["Neu 1", "20457 Hamburg"] }, withVies(ctx, stubVies({ DE123456789: "not_checked" })));
+    expect((await db.get<any>("SELECT vies_status FROM local_customers WHERE id = ?", [c.id])).vies_status).toBe("not_checked");
+
+    // A correction of the issued invoice is accepted, with that invoice's tax treatment.
     const credit = { invoice_id: "2026-0102", number: "2026-0103", document_date: TODAY, credit_total: 100, currency: "EUR", reason: "Storno" };
-    await expect(create_credit_note(db, credit, ctx)).rejects.toThrow(/reverse-charge credit note.*confirm the VAT ID first.*Nothing was issued/);
-    expect(await db.all("SELECT * FROM local_credit_notes")).toEqual([]);
+    const cn = await create_credit_note(db, credit, ctx);
+    expect(cn.vat_total).toBe(0);
+    expect(cn.customer).toMatchObject({ address_lines: DE.address_lines, revision: 2 });
+
+    // A NEW reverse-charge invoice is still refused.
+    await expect(create_invoice(db, inv(c.id, "2026-0104", 0), ctx)).rejects.toThrow(/confirm the VAT ID first.*not checked.*Nothing was issued/);
   });
 
   it("a normal-VAT invoice is not affected by VIES status", async () => {

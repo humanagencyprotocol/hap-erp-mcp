@@ -482,9 +482,6 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   // snapshot, never the customer's current data (R1).
   const customer = snapshotFromRow(invoice);
 
-  // D1: a reverse-charge credit note needs the customer's stored VIES `valid` too.
-  if (invoice.tax_mode === "reverse_charge") await requireViesValidForReverseCharge(db, invoice.customer_id, "credit note");
-
   if (currency !== invoice.currency) refuse("currency", currency, invoice.currency, `Invoice ${invoice.number} is in ${invoice.currency}.`);
 
   let totals: ReturnType<typeof computeLineTotals>;

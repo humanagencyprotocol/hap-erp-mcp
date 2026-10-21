@@ -517,9 +517,12 @@ export async function preview_customer_change(db: Db, args: Record<string, any>,
 // --- Issuing guard (Andreas's decision D1) ---
 
 /**
- * A reverse-charge invoice or credit note is issued only if the customer's
- * last stored VIES result is `valid`. Saving a customer as `not_checked`
- * stays allowed; issuing reverse charge to it does not.
+ * A NEW reverse-charge invoice (incl. a quote → invoice conversion, which
+ * goes through create_invoice) is issued only if the customer's last stored
+ * VIES result is `valid`. Saving a customer as `not_checked` stays allowed;
+ * issuing reverse charge to it does not. Credit notes are exempt: they
+ * correct an issued invoice and follow that invoice's snapshot tax treatment,
+ * so an unconfirmed VAT ID never blocks a correction (coordinator, 2026-10-21).
  */
 export async function requireViesValidForReverseCharge(db: Db, customerId: string, what: string): Promise<void> {
   const row = await requireLocalCustomer(db, customerId);
