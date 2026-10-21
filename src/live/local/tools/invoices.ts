@@ -30,7 +30,6 @@ import {
   refuse,
   roundToCents,
   INVOICE_VALUE_TOLERANCE,
-  type InvoiceLineInput,
   type PricedInvoiceLine,
 } from "../../../money.js";
 import { canonicalSha256 } from "../../../package-hash.js";
@@ -43,6 +42,7 @@ import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, type LocalCustomer } from "./customers.js";
+import { validateLocalLines, type LocalLine } from "../lines.js";
 
 export interface LocalCtx {
   company: LiveCompany;
@@ -51,6 +51,77 @@ export interface LocalCtx {
 }
 
 const HOME_CURRENCY = "EUR";
+
+/**
+ * Snapshot first (R1, docs/local-production-contract.md §3.6): the customer
+ * data an invoice or credit note was issued to, frozen on its row. Rendering
+ * reads only this — never the customer row again — so a later change to the
+ * customer cannot reach an issued document or a credit note on it.
+ *
+ * `issued`: taken when the document was issued. `migrated`: filled at
+ * migration time for documents issued before snapshots existed — for those,
+ * the archived PDF stays the legal original and the snapshot is a
+ * best-effort copy (see db.ts, M-A2).
+ */
+export type CustomerSnapshotSource = "issued" | "migrated";
+
+export interface CustomerSnapshot {
+  name: string;
+  address_lines: string[];
+  country: string;
+  uid: string | null;
+  revision: number;
+  source: CustomerSnapshotSource;
+}
+
+type CustomerRowWithRevision = LocalCustomer & { revision?: number };
+
+export function snapshotFromCustomer(customer: CustomerRowWithRevision): CustomerSnapshot {
+  return {
+    name: customer.name,
+    address_lines: JSON.parse(customer.address_lines),
+    country: customer.country,
+    uid: customer.uid,
+    revision: customer.revision ?? 1,
+    source: "issued",
+  };
+}
+
+/** The snapshot stored on an invoice or credit note row. */
+export function snapshotFromRow(row: LocalInvoiceRow | LocalCreditNoteRow): CustomerSnapshot {
+  if (row.customer_name == null || row.customer_address_lines == null || row.customer_country == null) {
+    throw new Error(`Document ${row.number} has no customer snapshot — the local DB migration did not run.`);
+  }
+  return {
+    name: row.customer_name,
+    address_lines: JSON.parse(row.customer_address_lines),
+    country: row.customer_country,
+    uid: row.customer_uid,
+    revision: row.customer_revision,
+    source: row.customer_snapshot_source,
+  };
+}
+
+/** Column values for the snapshot columns, in SNAPSHOT_COLUMNS order. */
+function snapshotParams(s: CustomerSnapshot): unknown[] {
+  return [s.name, JSON.stringify(s.address_lines), s.country, s.uid, s.revision, s.source];
+}
+
+const SNAPSHOT_COLUMNS =
+  "customer_name, customer_address_lines, customer_country, customer_uid, customer_revision, customer_snapshot_source";
+
+function viewModelCustomer(s: CustomerSnapshot) {
+  return { name: s.name, addressLines: s.address_lines, uid: s.uid };
+}
+
+/** The row as tools return it: the snapshot columns folded into `customer`. */
+function withCustomerSnapshot<T extends LocalInvoiceRow | LocalCreditNoteRow>(row: T) {
+  const {
+    customer_name: _n, customer_address_lines: _a, customer_country: _c, customer_uid: _u,
+    customer_revision: _r, customer_snapshot_source: _s, ...rest
+  } = row;
+  return { ...rest, customer: snapshotFromRow(row) };
+}
 
 export interface LocalInvoiceRow {
   id: string;
@@ -74,6 +145,14 @@ export interface LocalInvoiceRow {
   template_fingerprint: string;
   archive_path: string;
   archive_sha256: string;
+  customer_name: string;
+  customer_address_lines: string; // JSON-encoded string[]
+  customer_country: string;
+  customer_uid: string | null;
+  customer_revision: number;
+  customer_snapshot_source: CustomerSnapshotSource;
+  quote_id: string | null;
+  quote_revision: number | null;
   ticket_id: string | null;
 }
 
@@ -96,6 +175,12 @@ export interface LocalCreditNoteRow {
   template_fingerprint: string;
   archive_path: string;
   archive_sha256: string;
+  customer_name: string;
+  customer_address_lines: string; // JSON-encoded string[]
+  customer_country: string;
+  customer_uid: string | null;
+  customer_revision: number;
+  customer_snapshot_source: CustomerSnapshotSource;
   ticket_id: string | null;
 }
 
@@ -109,22 +194,6 @@ function validateServicePeriod(value: unknown): { from: string; to: string } {
   if (typeof p.from !== "string" || Number.isNaN(new Date(p.from).getTime())) throw new Error("service_period.from must be an ISO date");
   if (typeof p.to !== "string" || Number.isNaN(new Date(p.to).getTime())) throw new Error("service_period.to must be an ISO date");
   return { from: p.from, to: p.to };
-}
-
-/** Same shape as the simulation's lines, plus an optional `unit` (defaults to "Stk."). */
-function validateLocalLines(lines: unknown): Array<InvoiceLineInput & { unit: string }> {
-  if (!Array.isArray(lines) || lines.length === 0) {
-    throw new Error("lines must be a non-empty array of { description, qty, unit_price, vat_rate, unit? }");
-  }
-  return lines.map((line, i) => {
-    const { description, qty, unit_price, vat_rate, unit } = (line ?? {}) as Record<string, any>;
-    if (typeof description !== "string" || !description.trim()) throw new Error(`lines[${i}].description is required`);
-    if (typeof qty !== "number" || !Number.isFinite(qty) || qty <= 0) throw new Error(`lines[${i}].qty must be a positive number`);
-    if (typeof unit_price !== "number" || !Number.isFinite(unit_price) || unit_price < 0) throw new Error(`lines[${i}].unit_price must be a number >= 0`);
-    if (typeof vat_rate !== "number" || !Number.isFinite(vat_rate) || vat_rate < 0 || vat_rate > 100) throw new Error(`lines[${i}].vat_rate must be a number between 0 and 100`);
-    if (unit !== undefined && typeof unit !== "string") throw new Error(`lines[${i}].unit must be a string`);
-    return { item_id: null, description, qty, unit_price, vat_rate, unit: unit ?? "Stk." };
-  });
 }
 
 /**
@@ -157,25 +226,65 @@ export function representativeVatRate(lines: PricedInvoiceLine[], netTotal: numb
   return netTotal > 0 ? roundToCents((vatTotal / netTotal) * 100) : 0;
 }
 
+/**
+ * One document line row. The catalogue columns (item_id, list_price,
+ * item_revision) come from whatever lines.ts returned — null until Part C.
+ */
+async function insertLine(
+  db: Db, table: "local_invoice_lines" | "local_credit_note_lines", fk: "invoice_id" | "credit_note_id",
+  docId: string, line: PricedInvoiceLine, input: LocalLine | undefined
+): Promise<void> {
+  await db.run(
+    `INSERT INTO ${table} (id, ${fk}, description, qty, unit, unit_price, vat_rate, line_net, line_vat, line_gross,
+       item_id, list_price, item_revision)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uuidv4(), docId, line.description, line.qty, input?.unit ?? "Stk.", line.unit_price, line.vat_rate,
+      line.line_net, line.line_vat, line.line_gross, input?.item_id ?? null, input?.list_price ?? null,
+      input?.item_revision ?? null,
+    ]
+  );
+}
+
 function lineForTemplate(l: PricedInvoiceLine, unit: string): LineForTemplate {
   return { ...l, unit };
 }
 
 interface PreparedInvoice {
-  customer: LocalCustomer;
+  /** Read in the same call that derives the tax mode; the only customer data rendered or stored. */
+  customer: CustomerSnapshot;
+  customerId: string;
   number: string;
   documentDate: string;
   servicePeriod: { from: string; to: string };
-  linesWithUnit: Array<InvoiceLineInput & { unit: string }>;
+  linesWithUnit: LocalLine[];
   totals: ReturnType<typeof computeLineTotals>;
   taxMode: TaxMode;
   paymentTermDays: number;
 }
 
+/**
+ * Optional `customer_revision` on create_invoice / preview_invoice (§3.6): the
+ * approval names the customer revision it saw; a tax-data change between
+ * approval and execution then refuses instead of issuing to data nobody
+ * approved. Same wording as every revision refusal (R11).
+ */
+function requireCustomerRevision(customer: CustomerRowWithRevision, declared: unknown): void {
+  if (declared === undefined || declared === null) return;
+  const current = customer.revision ?? 1;
+  if (declared !== current) {
+    throw new Error(
+      `Refused: Customer ${customer.id} is at revision ${current}; this request is for revision ${JSON.stringify(declared)}. Nothing was issued.`
+    );
+  }
+}
+
 async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx): Promise<PreparedInvoice> {
   const { customer_id, net_total, currency, lines } = args;
 
-  const customer = await requireLocalCustomer(db, customer_id);
+  const customerRow: CustomerRowWithRevision = await requireLocalCustomer(db, customer_id);
+  requireCustomerRevision(customerRow, args.customer_revision);
+  const customer = snapshotFromCustomer(customerRow);
   const number = validateNumber(args.number);
   // Format-only here — both create_invoice and preview_invoice call this;
   // the "must be today" refusal is create_invoice's own, below (see date.ts).
@@ -216,7 +325,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
           return args.payment_term_days as number;
         })();
 
-  return { customer, number, documentDate, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
+  return { customer, customerId: customerRow.id, number, documentDate, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
 }
 
 function invoiceVars(ctx: LocalCtx, prepared: PreparedInvoice, issuedAt: Date, dueDate: Date) {
@@ -224,7 +333,7 @@ function invoiceVars(ctx: LocalCtx, prepared: PreparedInvoice, issuedAt: Date, d
   const linesForTemplate = totals.lines.map((l, i) => lineForTemplate(l, linesWithUnit[i].unit));
   return buildViewModel({
     company: ctx.company,
-    customer: { name: customer.name, addressLines: JSON.parse(customer.address_lines), uid: customer.uid },
+    customer: viewModelCustomer(customer),
     documentKind: "invoice",
     number,
     issuedAt,
@@ -242,7 +351,7 @@ function invoiceVars(ctx: LocalCtx, prepared: PreparedInvoice, issuedAt: Date, d
 async function invoiceWithLines(db: Db, idOrNumber: string) {
   const invoice = await requireLocalInvoiceRow(db, idOrNumber);
   const lines = await db.all<any>("SELECT * FROM local_invoice_lines WHERE invoice_id = ? ORDER BY rowid", [invoice.id]);
-  return { ...invoice, lines };
+  return { ...withCustomerSnapshot(invoice), lines };
 }
 
 export async function requireLocalInvoiceRow(db: Db, idOrNumber: string): Promise<LocalInvoiceRow> {
@@ -287,23 +396,19 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
       `INSERT INTO local_invoices (
         id, number, customer_id, status, currency, net_total, vat_total, gross_total, credited_total, tax_mode,
         payment_term_days, service_period_from, service_period_to, issued_at, due_date, memo,
-        template_id, template_version, template_fingerprint, archive_path, archive_sha256, ticket_id
-      ) VALUES (?, ?, ?, 'issued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        template_id, template_version, template_fingerprint, archive_path, archive_sha256, ticket_id,
+        ${SNAPSHOT_COLUMNS}
+      ) VALUES (?, ?, ?, 'issued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        id, prepared.number, prepared.customer.id, HOME_CURRENCY, prepared.totals.net_total, prepared.totals.vat_total,
+        id, prepared.number, prepared.customerId, HOME_CURRENCY, prepared.totals.net_total, prepared.totals.vat_total,
         prepared.totals.gross_total, prepared.taxMode, prepared.paymentTermDays, prepared.servicePeriod.from,
         prepared.servicePeriod.to, issuedAt.toISOString(), dueDate.toISOString(), args.memo ?? null,
         ctx.template.template, ctx.template.version, templateFingerprint, archived.path, archived.sha256,
-        args.ticket_id ?? null,
+        args.ticket_id ?? null, ...snapshotParams(prepared.customer),
       ]
     );
     for (let i = 0; i < prepared.totals.lines.length; i++) {
-      const line = prepared.totals.lines[i];
-      await db.run(
-        `INSERT INTO local_invoice_lines (id, invoice_id, description, qty, unit, unit_price, vat_rate, line_net, line_vat, line_gross)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [uuidv4(), id, line.description, line.qty, prepared.linesWithUnit[i].unit, line.unit_price, line.vat_rate, line.line_net, line.line_vat, line.line_gross]
-      );
+      await insertLine(db, "local_invoice_lines", "invoice_id", id, prepared.totals.lines[i], prepared.linesWithUnit[i]);
     }
     await db.run("COMMIT");
   } catch (err) {
@@ -347,7 +452,8 @@ export async function list_invoices(db: Db, args: Record<string, any>) {
   if (status) { conditions.push("status = ?"); params.push(status); }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(limit);
-  return db.all<LocalInvoiceRow>(`SELECT * FROM local_invoices ${where} ORDER BY issued_at DESC LIMIT ?`, params);
+  const rows = await db.all<LocalInvoiceRow>(`SELECT * FROM local_invoices ${where} ORDER BY issued_at DESC LIMIT ?`, params);
+  return rows.map(withCustomerSnapshot);
 }
 
 // --- Credit notes ---
@@ -356,7 +462,7 @@ async function creditNoteWithLines(db: Db, id: string) {
   const row = await db.get<LocalCreditNoteRow>("SELECT * FROM local_credit_notes WHERE id = ?", [id]);
   if (!row) throw new Error(`Unknown credit note id: ${id}`);
   const lines = await db.all<any>("SELECT * FROM local_credit_note_lines WHERE credit_note_id = ? ORDER BY rowid", [id]);
-  return { ...row, lines };
+  return { ...withCustomerSnapshot(row), lines };
 }
 
 export async function create_credit_note(db: Db, args: Record<string, any>, ctx: LocalCtx) {
@@ -370,12 +476,14 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   await requireNumberUnused(db, number);
 
   const invoice = await requireLocalInvoiceRow(db, invoice_id);
-  const customer = await requireLocalCustomer(db, invoice.customer_id);
+  // A credit note corrects THAT invoice: it renders and stores the invoice's
+  // snapshot, never the customer's current data (R1).
+  const customer = snapshotFromRow(invoice);
 
   if (currency !== invoice.currency) refuse("currency", currency, invoice.currency, `Invoice ${invoice.number} is in ${invoice.currency}.`);
 
   let totals: ReturnType<typeof computeLineTotals>;
-  let linesWithUnit: Array<InvoiceLineInput & { unit: string }>;
+  let linesWithUnit: LocalLine[];
   if (lines !== undefined) {
     linesWithUnit = validateLocalLines(lines);
     totals = computeLineTotals(linesWithUnit);
@@ -406,7 +514,7 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
 
   const vars = buildViewModel({
     company: ctx.company,
-    customer: { name: customer.name, addressLines: JSON.parse(customer.address_lines), uid: customer.uid },
+    customer: viewModelCustomer(customer),
     documentKind: "credit_note",
     number,
     issuedAt,
@@ -435,21 +543,17 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
       `INSERT INTO local_credit_notes (
         id, number, invoice_id, invoice_number, customer_id, currency, net_total, vat_total, gross_total, reason,
         service_period_from, service_period_to, issued_at, template_id, template_version, template_fingerprint,
-        archive_path, archive_sha256, ticket_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        archive_path, archive_sha256, ticket_id, ${SNAPSHOT_COLUMNS}
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, number, invoice.id, invoice.number, invoice.customer_id, currency, totals.net_total, totals.vat_total,
         totals.gross_total, reason, servicePeriod.from, servicePeriod.to, issuedAt.toISOString(), ctx.template.template,
         ctx.template.version, templateFingerprint, archived.path, archived.sha256, args.ticket_id ?? null,
+        ...snapshotParams(customer),
       ]
     );
     for (let i = 0; i < totals.lines.length; i++) {
-      const line = totals.lines[i];
-      await db.run(
-        `INSERT INTO local_credit_note_lines (id, credit_note_id, description, qty, unit, unit_price, vat_rate, line_net, line_vat, line_gross)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [uuidv4(), id, line.description, line.qty, linesWithUnit[i]?.unit ?? "Stk.", line.unit_price, line.vat_rate, line.line_net, line.line_vat, line.line_gross]
-      );
+      await insertLine(db, "local_credit_note_lines", "credit_note_id", id, totals.lines[i], linesWithUnit[i]);
     }
     const newStatus = projectedCredited >= invoice.net_total - INVOICE_VALUE_TOLERANCE ? "credited" : "partially_credited";
     await db.run("UPDATE local_invoices SET credited_total = ?, status = ? WHERE id = ?", [projectedCredited, newStatus, invoice.id]);
@@ -474,7 +578,8 @@ export async function list_credit_notes(db: Db, args: Record<string, any>) {
   if (customer_id) { conditions.push("customer_id = ?"); params.push(customer_id); }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(limit);
-  return db.all<LocalCreditNoteRow>(`SELECT * FROM local_credit_notes ${where} ORDER BY issued_at DESC LIMIT ?`, params);
+  const rows = await db.all<LocalCreditNoteRow>(`SELECT * FROM local_credit_notes ${where} ORDER BY issued_at DESC LIMIT ?`, params);
+  return rows.map(withCustomerSnapshot);
 }
 
 // --- Documents (archive reads) ---

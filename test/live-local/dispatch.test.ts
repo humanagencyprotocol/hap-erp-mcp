@@ -14,7 +14,13 @@ import { join } from "path";
 import { createDb, type Db } from "../../src/db.js";
 import { callTool } from "../../src/dispatch.js";
 import { LIVE_NOT_AVAILABLE, getLiveAdapter } from "../../src/mode.js";
-import { LOCAL_TOOL_NAMES } from "../../src/live/local/dispatch.js";
+import { LOCAL_TOOL_NAMES, mergeHandlerAreas } from "../../src/live/local/dispatch.js";
+import { LOCAL_TOOL_DEFINITIONS } from "../../src/live/local/definitions.js";
+import { QUOTE_TOOL_DEFINITIONS } from "../../src/live/local/definitions-quotes.js";
+import { ITEM_TOOL_DEFINITIONS } from "../../src/live/local/definitions-items.js";
+import { QUOTE_TOOL_HANDLERS } from "../../src/live/local/tools/quotes.js";
+import { ITEM_TOOL_HANDLERS } from "../../src/live/local/tools/items.js";
+import { addCustomer } from "../../src/live/local/tools/customers.js";
 import { createLocalDb } from "../../src/live/local/db.js";
 
 const MUSTER_COMPANY_JSON = {
@@ -106,5 +112,49 @@ describe("live mode, adapter=local — tool availability", () => {
       "find_customers", "get_customer", "create_invoice", "preview_invoice", "create_credit_note",
       "get_invoice", "list_invoices", "get_credit_note", "list_credit_notes", "get_document",
     ]);
+  });
+});
+
+describe("local tool registry (contract §9, A1)", () => {
+  it("LOCAL_TOOL_NAMES is exactly the merged definitions, in order, with no duplicates", () => {
+    expect(LOCAL_TOOL_NAMES).toEqual(LOCAL_TOOL_DEFINITIONS.map((d) => d.name));
+    expect(new Set(LOCAL_TOOL_NAMES).size).toBe(LOCAL_TOOL_NAMES.length);
+  });
+
+  it("the quote and item areas are empty stubs until Parts B and C land", () => {
+    expect(QUOTE_TOOL_DEFINITIONS).toEqual([]);
+    expect(ITEM_TOOL_DEFINITIONS).toEqual([]);
+    expect(Object.keys(QUOTE_TOOL_HANDLERS)).toEqual([]);
+    expect(Object.keys(ITEM_TOOL_HANDLERS)).toEqual([]);
+  });
+
+  it("a tool name claimed by two areas is refused at load, naming both", () => {
+    const h = async () => null;
+    expect(() => mergeHandlerAreas({ core: { get_quote: h }, quotes: { get_quote: h } })).toThrow(
+      /"get_quote" is registered by both core and quotes/
+    );
+  });
+
+  it("create_invoice and preview_invoice accept an optional customer_revision", () => {
+    for (const name of ["create_invoice", "preview_invoice"]) {
+      const def = LOCAL_TOOL_DEFINITIONS.find((d) => d.name === name)!;
+      expect(def.inputSchema.properties).toHaveProperty("customer_revision");
+      expect(def.inputSchema.required).not.toContain("customer_revision");
+    }
+  });
+});
+
+describe("CLI customers add — revision 1", () => {
+  it("writes revision 1; the revision row exists after the next open", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "erp-dispatch-cli-"));
+    dbPath = join(dataDir, "erp-local.sqlite");
+    db = await createLocalDb(dbPath);
+    const c = await addCustomer(db, { name: "MUSTER GmbH", address_lines: ["Weg 1"], country: "AT" });
+    expect((await db.get<any>("SELECT revision FROM local_customers WHERE id = ?", [c.id])).revision).toBe(1);
+    await db.close();
+    db = await createLocalDb(dbPath);
+    const rev = await db.get<any>("SELECT * FROM local_master_revisions WHERE entity = 'customer' AND entity_id = ?", [c.id]);
+    expect(rev.revision).toBe(1);
+    expect(JSON.parse(rev.content).name).toBe("MUSTER GmbH");
   });
 });

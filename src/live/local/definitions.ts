@@ -1,4 +1,21 @@
-/** The MCP tool surface for live mode's "local" adapter — kept separate from the simulation's surface. */
+/**
+ * The MCP tool surface for live mode's "local" adapter — kept separate from
+ * the simulation's surface. A registry: each area (core invoicing +
+ * customers here, quotes in definitions-quotes.ts, catalogue items in
+ * definitions-items.ts) owns its own list; LOCAL_TOOL_DEFINITIONS merges
+ * them, and dispatch.ts merges the matching handlers
+ * (docs/local-production-contract.md §9).
+ */
+import { QUOTE_TOOL_DEFINITIONS } from "./definitions-quotes.js";
+import { ITEM_TOOL_DEFINITIONS } from "./definitions-items.js";
+
+export interface LocalToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: { type: "object"; properties: Record<string, unknown>; required: readonly string[] };
+  outputSchema?: Record<string, unknown>;
+}
+
 const TICKET_FIELD = {
   type: "string" as const,
   description: "Authorization reference for this call, set by the governing gateway — agents do not set this.",
@@ -36,6 +53,16 @@ const DOCUMENT_DATE_FIELD = {
     "(see the company file's timezone, default Europe/Vienna) — propose the call again with today's date.",
 };
 
+// Optional on create_invoice / preview_invoice (contract §3.6): the governing
+// layer passes the customer revision the approval was shown, so a customer
+// change between approval and execution refuses instead of issuing.
+const CUSTOMER_REVISION_FIELD = {
+  type: "number" as const,
+  description:
+    "Revision of the customer this request was prepared for (optional). If given and the customer has " +
+    "changed since, the call is refused naming both revisions.",
+};
+
 const PREVIEW_DOCUMENT_DATE_FIELD = {
   type: "string" as const,
   description:
@@ -65,7 +92,7 @@ const PREVIEW_INVOICE_OUTPUT_SCHEMA = {
   required: [...DOCUMENT_OUTPUT_SCHEMA.required, "pages"],
 };
 
-export const LOCAL_TOOL_DEFINITIONS = [
+const CORE_TOOL_DEFINITIONS = [
   {
     name: "find_customers",
     description: "Search this company's own customers by name or email",
@@ -100,6 +127,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
+        customer_revision: CUSTOMER_REVISION_FIELD,
         number: { type: "string", description: "Invoice number — required, comes with the request" },
         document_date: DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
@@ -122,6 +150,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
+        customer_revision: CUSTOMER_REVISION_FIELD,
         number: { type: "string", description: "Invoice number as it would appear on the rendered PDF" },
         document_date: PREVIEW_DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
@@ -159,7 +188,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
   },
   {
     name: "get_invoice",
-    description: "Get a single invoice with its lines. Accepts the invoice ID or its number.",
+    description: "Get a single invoice with its lines and the customer data as issued (`customer`). Accepts the invoice ID or its number.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string", description: "Invoice ID or number" } },
@@ -181,7 +210,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
   },
   {
     name: "get_credit_note",
-    description: "Get a single credit note with its lines",
+    description: "Get a single credit note with its lines and the customer data as issued (`customer`)",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string", description: "Credit note ID or number" } },
@@ -217,3 +246,9 @@ export const LOCAL_TOOL_DEFINITIONS = [
     outputSchema: DOCUMENT_OUTPUT_SCHEMA,
   },
 ] as const;
+
+export const LOCAL_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
+  ...CORE_TOOL_DEFINITIONS,
+  ...QUOTE_TOOL_DEFINITIONS,
+  ...ITEM_TOOL_DEFINITIONS,
+];
