@@ -11,10 +11,12 @@
  * - `withLocalLock(fn)`: runs `fn` after every earlier holder has finished —
  *   one queue per process. Re-entrant (AsyncLocalStorage): a locked write
  *   called from inside a locked dispatch call runs directly instead of
- *   waiting on itself. dispatch.ts puts EVERY Local tool call through it
- *   (reads too, so no read ever sees a write's uncommitted rows); the write
- *   handlers and the CLI writers take it themselves as well, so a direct call
- *   (tests, CLI) is serialised the same way.
+ *   waiting on itself. dispatch.ts puts every Local tool call through it
+ *   (reads too, so no read ever sees a write's uncommitted rows) — except the
+ *   VIES tools (customers.ts SELF_LOCKING_TOOLS), which take it only around
+ *   their DB steps and never across the outside call. The write handlers and
+ *   the CLI writers take it themselves as well, so a direct call (tests, CLI)
+ *   is serialised the same way.
  * - `inTransaction(db, fn, onRollback?)`: `BEGIN IMMEDIATE` (takes SQLite's
  *   write lock at once, so another process — e.g. an older erp-mcp sharing
  *   the data dir — waits on busy_timeout instead of failing mid-way), COMMIT,
