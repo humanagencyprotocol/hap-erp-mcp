@@ -43,6 +43,9 @@ import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, requireViesValidForReverseCharge, type LocalCustomer } from "./customers.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
+import {
+  requireLocalQuote, requireQuoteRevisionRow, storedLinesAsInput, quoteDocument, type StoredQuoteLine,
+} from "./quotes.js";
 
 export interface LocalCtx {
   company: LiveCompany;
@@ -203,7 +206,7 @@ function validateServicePeriod(value: unknown): { from: string; to: string } {
  * wrong — and was issued with every check passing (Rehearsal demo, 2026-10-19).
  * Normal mode stays open: 0 % lines can be legitimately exempt.
  */
-function refuseIfVatContradictsTaxMode(lines: Array<{ vat_rate: number }>, taxMode: TaxMode, what: string): void {
+export function refuseIfVatContradictsTaxMode(lines: Array<{ vat_rate: number }>, taxMode: TaxMode, what: string): void {
   if (taxMode === "normal") return;
   const bad = lines.map((l, i) => ({ i, rate: l.vat_rate })).filter((x) => x.rate !== 0);
   if (bad.length === 0) return;
@@ -364,6 +367,8 @@ export async function requireLocalInvoiceRow(db: Db, idOrNumber: string): Promis
 
 export async function create_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "invoice");
+  const conversion = await prepareQuoteConversion(db, args);
+  args = conversion?.args ?? args;
   const prepared = await prepareInvoice(db, args, ctx);
   // Issuing — unlike preview_invoice — refuses a document_date that is not
   // today in the company's own calendar (see date.ts): the printed date is
@@ -399,19 +404,21 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
         id, number, customer_id, status, currency, net_total, vat_total, gross_total, credited_total, tax_mode,
         payment_term_days, service_period_from, service_period_to, issued_at, due_date, memo,
         template_id, template_version, template_fingerprint, archive_path, archive_sha256, ticket_id,
-        ${SNAPSHOT_COLUMNS}
-      ) VALUES (?, ?, ?, 'issued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ${SNAPSHOT_COLUMNS}, quote_id, quote_revision
+      ) VALUES (?, ?, ?, 'issued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, prepared.number, prepared.customerId, HOME_CURRENCY, prepared.totals.net_total, prepared.totals.vat_total,
         prepared.totals.gross_total, prepared.taxMode, prepared.paymentTermDays, prepared.servicePeriod.from,
         prepared.servicePeriod.to, issuedAt.toISOString(), dueDate.toISOString(), args.memo ?? null,
         ctx.template.template, ctx.template.version, templateFingerprint, archived.path, archived.sha256,
         args.ticket_id ?? null, ...snapshotParams(prepared.customer),
+        conversion?.quoteId ?? null, conversion?.quoteRevision ?? null,
       ]
     );
     for (let i = 0; i < prepared.totals.lines.length; i++) {
       await insertLine(db, "local_invoice_lines", "invoice_id", id, prepared.totals.lines[i], prepared.linesWithUnit[i]);
     }
+    if (conversion) await markQuoteConverted(db, conversion, id);
     await db.run("COMMIT");
   } catch (err) {
     await db.run("ROLLBACK").catch(() => {});
@@ -423,6 +430,8 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
 
 export async function preview_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "invoice");
+  const conversion = await prepareQuoteConversion(db, args);
+  args = conversion?.args ?? args;
   const prepared = await prepareInvoice(db, args, ctx);
   // Deliberately no requireNumberUnused — a preview does not consume the number.
   // Deliberately no requireDocumentDateIsToday — an approver may want to see
@@ -456,6 +465,83 @@ export async function list_invoices(db: Db, args: Record<string, any>) {
   params.push(limit);
   const rows = await db.all<LocalInvoiceRow>(`SELECT * FROM local_invoices ${where} ORDER BY issued_at DESC LIMIT ?`, params);
   return rows.map(withCustomerSnapshot);
+}
+
+// --- Quote → invoice (Part B: contract §4.4, AM2, R7, R8, D1) ---
+//
+// create_invoice / preview_invoice with `quote_id` + `quote_revision` (both or
+// neither). Everything else is the normal invoice path: `number` and
+// document_date == today are still required (R7), the tax mode comes from the
+// customer's CURRENT data, and refuseIfInvalidTaxMode /
+// refuseIfVatContradictsTaxMode apply unchanged (R8), and so does
+// create_invoice's D1 guard (reverse charge only with a stored VIES `valid`). The quote is marked
+// `converted` in the same transaction as the invoice insert.
+
+interface QuoteConversion {
+  /** The request with `lines` filled from the quote revision when omitted. */
+  args: Record<string, any>;
+  quoteId: string;
+  quoteNumber: string;
+  quoteRevision: number;
+  customerId: string;
+}
+
+async function prepareQuoteConversion(db: Db, args: Record<string, any>): Promise<QuoteConversion | null> {
+  const hasId = args.quote_id !== undefined && args.quote_id !== null;
+  const hasRevision = args.quote_revision !== undefined && args.quote_revision !== null;
+  if (!hasId && !hasRevision) return null;
+  if (hasId !== hasRevision) {
+    throw new Error("Refused: quote_id and quote_revision go together — pass both to invoice a quote, or neither. Nothing was issued.");
+  }
+  const quote = await requireLocalQuote(db, args.quote_id);
+  if (quote.status === "converted") {
+    const inv = await db.get<{ number: string }>("SELECT number FROM local_invoices WHERE id = ?", [quote.invoice_id]);
+    throw new Error(`Refused: quote ${quote.number} was already invoiced (invoice ${inv?.number ?? quote.invoice_id}) — one invoice per quote. Nothing was issued.`);
+  }
+  if (quote.status !== "issued") throw new Error(`Refused: quote ${quote.number} is ${quote.status}. Nothing was issued.`);
+  if (args.quote_revision !== quote.revision) {
+    throw new Error(
+      `Refused: Quote ${quote.number} is at revision ${quote.revision}; this request is for revision ${JSON.stringify(args.quote_revision)}. Nothing was issued.`
+    );
+  }
+  if (args.customer_id !== quote.customer_id) {
+    refuse("customer_id", args.customer_id, quote.customer_id, `Quote ${quote.number} is for customer ${quote.customer_id}. Nothing was issued.`);
+  }
+  const revision = await requireQuoteRevisionRow(db, quote, quote.revision);
+
+  // AM2: the quote was made for one revision of the customer's data; a later
+  // change (e.g. a new VAT ID that turns normal VAT into reverse charge) must
+  // not flow into an invoice nobody quoted. Mirrors the R11 wording.
+  const customer = (await requireLocalCustomer(db, quote.customer_id)) as LocalCustomer & { revision?: number };
+  const customerRevision = customer.revision ?? 1;
+  if (customerRevision !== revision.customer_revision) {
+    throw new Error(
+      `Refused: Customer ${customer.id} is at revision ${customerRevision}; quote ${quote.number} revision ${quote.revision} ` +
+        `was made for customer revision ${revision.customer_revision} — update the quote first. Nothing was issued.`
+    );
+  }
+
+  // Lines omitted → the quote revision's lines (partial invoicing passes its own).
+  const lines = args.lines !== undefined ? args.lines : storedLinesAsInput(JSON.parse(revision.lines) as StoredQuoteLine[]);
+  return {
+    args: { ...args, lines },
+    quoteId: quote.id,
+    quoteNumber: quote.number,
+    quoteRevision: quote.revision,
+    customerId: quote.customer_id,
+  };
+}
+
+/** Inside the invoice transaction: issued → converted, guarded against a concurrent conversion or update. */
+async function markQuoteConverted(db: Db, conversion: QuoteConversion, invoiceId: string): Promise<void> {
+  await db.run(
+    `UPDATE local_quotes SET status = 'converted', invoice_id = ?, updated_at = ? WHERE id = ? AND status = 'issued' AND revision = ?`,
+    [invoiceId, new Date().toISOString(), conversion.quoteId, conversion.quoteRevision]
+  );
+  const after = await db.get<{ invoice_id: string | null }>("SELECT invoice_id FROM local_quotes WHERE id = ?", [conversion.quoteId]);
+  if (after?.invoice_id !== invoiceId) {
+    throw new Error(`Refused: quote ${conversion.quoteNumber} changed during this call. Nothing was issued.`);
+  }
 }
 
 // --- Credit notes ---
@@ -600,8 +686,10 @@ export async function get_document(db: Db, args: Record<string, any>) {
     if (!row) throw new Error(`Unknown credit note id: ${id}`);
     archivePathStored = row.archive_path;
     archiveSha256 = row.archive_sha256;
+  } else if (kind === "quote-pdf") {
+    return quoteDocument(db, id);
   } else {
-    throw new Error(`Unknown document kind: ${JSON.stringify(kind)} — expected "invoice-pdf" or "credit-note-pdf".`);
+    throw new Error(`Unknown document kind: ${JSON.stringify(kind)} — expected "invoice-pdf", "credit-note-pdf" or "quote-pdf".`);
   }
 
   const buf = readAndVerify(archivePathStored, archiveSha256);

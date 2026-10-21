@@ -150,7 +150,11 @@ CREATE TABLE IF NOT EXISTS local_quotes (
   id TEXT PRIMARY KEY,
   number TEXT NOT NULL UNIQUE,
   customer_id TEXT NOT NULL REFERENCES local_customers(id),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','sent','converted','cancelled')),
+  -- 'issued' (Part B, decision D3): a Local quote is issued like an invoice —
+  -- number from the request, PDF archived at create_quote — and there is no
+  -- send step; whether the email carrying it ran is not tracked here.
+  -- 'draft'/'sent'/'cancelled' stay listed for the simulator's vocabulary.
+  status TEXT NOT NULL DEFAULT 'issued' CHECK(status IN ('issued','draft','sent','converted','cancelled')),
   currency TEXT NOT NULL,
   discount_pct REAL NOT NULL DEFAULT 0,
   net_total REAL NOT NULL,

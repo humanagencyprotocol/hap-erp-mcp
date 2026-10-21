@@ -65,6 +65,19 @@ const CUSTOMER_REVISION_FIELD = {
     "changed since, the call is refused naming both revisions.",
 };
 
+// Optional on create_invoice / preview_invoice (Part B, contract §4.4): invoice
+// an issued quote. Both or neither; lines may be omitted to take the quote's.
+const QUOTE_ID_FIELD = {
+  type: "string" as const,
+  description:
+    "Quote to invoice (ID or number; optional, with quote_revision). Omit lines to invoice the quote's lines. Refused " +
+    "if the quote was already invoiced, has moved to another revision, or the customer's data changed since it was quoted.",
+};
+const QUOTE_REVISION_FIELD = {
+  type: "number" as const,
+  description: "Revision of the quote being invoiced (required with quote_id) — must be the quote's current revision.",
+};
+
 const PREVIEW_DOCUMENT_DATE_FIELD = {
   type: "string" as const,
   description:
@@ -246,17 +259,19 @@ const CORE_TOOL_DEFINITIONS = [
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
         customer_revision: CUSTOMER_REVISION_FIELD,
+        quote_id: QUOTE_ID_FIELD,
+        quote_revision: QUOTE_REVISION_FIELD,
         number: { type: "string", description: "Invoice number — required, comes with the request" },
         document_date: DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
-        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
+        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required, unless quote_id is given — then omit to invoice the quote's lines)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
         currency: { type: "string", description: "Must be EUR" },
         payment_term_days: { type: "number", description: "Days until due, from issue (optional, defaults to the company's own setting)" },
         memo: { type: "string", description: "Free-form note (optional)" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "net_total", "currency"],
     },
   },
   {
@@ -269,16 +284,18 @@ const CORE_TOOL_DEFINITIONS = [
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
         customer_revision: CUSTOMER_REVISION_FIELD,
+        quote_id: QUOTE_ID_FIELD,
+        quote_revision: QUOTE_REVISION_FIELD,
         number: { type: "string", description: "Invoice number as it would appear on the rendered PDF" },
         document_date: PREVIEW_DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
-        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
+        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required, unless quote_id is given — then omit to invoice the quote's lines)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
         currency: { type: "string", description: "Must be EUR" },
         payment_term_days: { type: "number", description: "Days until due, from issue (optional)" },
         memo: { type: "string", description: "Free-form note (optional)" },
       },
-      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "net_total", "currency"],
     },
     outputSchema: PREVIEW_INVOICE_OUTPUT_SCHEMA,
   },
@@ -351,13 +368,13 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: "get_document",
     description:
-      "Read an issued invoice or credit note PDF from the archive. Verifies the file's sha256 against the " +
+      "Read an issued invoice, credit note or quote PDF from the archive (a quote: its current revision). Verifies the file's sha256 against the " +
       "fingerprint stored at issue time and refuses to return it if they no longer match.",
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["invoice-pdf", "credit-note-pdf"], description: "Which document to read" },
-        id: { type: "string", description: "Invoice or credit note ID (or number)" },
+        kind: { type: "string", enum: ["invoice-pdf", "credit-note-pdf", "quote-pdf"], description: "Which document to read" },
+        id: { type: "string", description: "Invoice, credit note or quote ID (or number)" },
       },
       required: ["kind", "id"],
     },
