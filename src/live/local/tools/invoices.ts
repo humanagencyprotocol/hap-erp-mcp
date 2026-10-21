@@ -42,7 +42,7 @@ import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, type LocalCustomer } from "./customers.js";
-import { validateLocalLines, type LocalLine } from "../lines.js";
+import { resolveLocalLines, type LocalLine } from "../lines.js";
 
 export interface LocalCtx {
   company: LiveCompany;
@@ -228,7 +228,7 @@ export function representativeVatRate(lines: PricedInvoiceLine[], netTotal: numb
 
 /**
  * One document line row. The catalogue columns (item_id, list_price,
- * item_revision) come from whatever lines.ts returned — null until Part C.
+ * item_revision) come from lines.ts resolveLocalLines — null for a line without item_id.
  */
 async function insertLine(
   db: Db, table: "local_invoice_lines" | "local_credit_note_lines", fk: "invoice_id" | "credit_note_id",
@@ -290,7 +290,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
   // the "must be today" refusal is create_invoice's own, below (see date.ts).
   const documentDate = validateDocumentDate(args.document_date);
   const servicePeriod = validateServicePeriod(args.service_period);
-  const linesWithUnit = validateLocalLines(lines);
+  const linesWithUnit = await resolveLocalLines(db, lines);
   const totals = computeLineTotals(linesWithUnit);
 
   if (currency !== HOME_CURRENCY) refuse("currency", currency, HOME_CURRENCY, "Local live invoicing issues in EUR only.");
@@ -485,7 +485,7 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   let totals: ReturnType<typeof computeLineTotals>;
   let linesWithUnit: LocalLine[];
   if (lines !== undefined) {
-    linesWithUnit = validateLocalLines(lines);
+    linesWithUnit = await resolveLocalLines(db, lines);
     totals = computeLineTotals(linesWithUnit);
     // A credit note shares the invoice's tax treatment — its lines too.
     refuseIfVatContradictsTaxMode(linesWithUnit, invoice.tax_mode as TaxMode, "credit note");

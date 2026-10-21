@@ -92,10 +92,10 @@ describe("live mode, adapter=local — tool availability", () => {
     }
   });
 
-  it("refuses every item/quote/order tool — none of that exists in local live invoicing", async () => {
+  it("refuses every quote/order tool — none of that exists in local live invoicing", async () => {
     await setup();
     const env = envFor(dataDir);
-    for (const name of ["list_items", "get_item", "create_quote", "update_quote", "send_quote", "convert_quote_to_order", "list_quotes", "get_quote", "list_orders", "get_order"]) {
+    for (const name of ["create_quote", "update_quote", "send_quote", "convert_quote_to_order", "list_quotes", "get_quote", "list_orders", "get_order"]) {
       await expect(callTool(db, "live", name, {}, env)).rejects.toThrow(/not available in local live mode/);
     }
   });
@@ -111,6 +111,8 @@ describe("live mode, adapter=local — tool availability", () => {
     expect(LOCAL_TOOL_NAMES).toEqual([
       "find_customers", "get_customer", "create_invoice", "preview_invoice", "create_credit_note",
       "get_invoice", "list_invoices", "get_credit_note", "list_credit_notes", "get_document",
+      ...QUOTE_TOOL_DEFINITIONS.map((d) => d.name),
+      "list_items", "get_item", "create_item", "update_item", "update_item_price",
     ]);
   });
 });
@@ -121,11 +123,15 @@ describe("local tool registry (contract §9, A1)", () => {
     expect(new Set(LOCAL_TOOL_NAMES).size).toBe(LOCAL_TOOL_NAMES.length);
   });
 
-  it("the quote and item areas are empty stubs until Parts B and C land", () => {
+  it("the quote area is an empty stub until Part B lands", () => {
     expect(QUOTE_TOOL_DEFINITIONS).toEqual([]);
-    expect(ITEM_TOOL_DEFINITIONS).toEqual([]);
     expect(Object.keys(QUOTE_TOOL_HANDLERS)).toEqual([]);
-    expect(Object.keys(ITEM_TOOL_HANDLERS)).toEqual([]);
+  });
+
+  it("the item area (Part C) defines and handles the same five tools", () => {
+    const names = ["list_items", "get_item", "create_item", "update_item", "update_item_price"];
+    expect(ITEM_TOOL_DEFINITIONS.map((d) => d.name)).toEqual(names);
+    expect(Object.keys(ITEM_TOOL_HANDLERS)).toEqual(names);
   });
 
   it("a tool name claimed by two areas is refused at load, naming both", () => {
