@@ -94,14 +94,37 @@ const PREVIEW_INVOICE_OUTPUT_SCHEMA = {
   required: [...DOCUMENT_OUTPUT_SCHEMA.required, "pages"],
 };
 
-const CORE_TOOL_DEFINITIONS = [
+// Customers (docs/local-production-contract.md §3). Writes are each their own
+// decision: contact data, tax data (name, address, country, VAT ID) and new
+// customers. check_vat_id / preview_customer_change are card-only reads.
+const CUSTOMER_ADDRESS_FIELD = {
+  type: "array" as const,
+  items: { type: "string" },
+  description: "Address lines printed under the name (street, zip + city, …) — at least one",
+};
+const COUNTRY_FIELD = { type: "string" as const, description: "ISO 3166-1 alpha-2 country code, e.g. AT" };
+const REVISION_FIELD = {
+  type: "number" as const,
+  description: "The customer's current revision (from get_customer) — the change is refused if the customer has changed since.",
+};
+const VIES_NOTE =
+  "A VAT ID of an EU member state (or XI, Northern Ireland) is checked online against the European Commission's VIES " +
+  "service when saved — this sends the customer's country and VAT ID, and the company's own VAT ID, to ec.europa.eu. " +
+  "A VAT ID VIES reports as not valid is refused; if VIES is unreachable the customer is saved with the VAT ID marked " +
+  "not checked.";
+
+const CUSTOMER_TOOL_DEFINITIONS = [
   {
     name: "find_customers",
-    description: "Search this company's own customers by name or email",
+    description:
+      "Search this company's own customers by name or email, or find one exactly by VAT ID (`uid`) or CRM contact " +
+      "(`crm_contact_id`) — check this before create_customer: a VAT ID or CRM contact can belong to only one customer.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Text search across name and email" },
+        uid: { type: "string", description: "Exact VAT ID (spaces, dots and dashes are ignored)" },
+        crm_contact_id: { type: "string", description: "Exact CRM contact id" },
         limit: { type: "number", description: "Maximum results to return (default: 50)" },
       },
       required: [],
@@ -109,13 +132,106 @@ const CORE_TOOL_DEFINITIONS = [
   },
   {
     name: "get_customer",
-    description: "Get a single customer (name, address, country, UID, email)",
+    description:
+      "Get a single customer (name, address, country, VAT ID, email, CRM contact, revision, last VIES check). " +
+      "With `revision`, returns that older revision's content.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", description: "Customer ID" } },
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: { type: "number", description: "An older revision to read (optional)" },
+      },
       required: ["id"],
     },
   },
+  {
+    name: "create_customer",
+    description:
+      "Create a customer (revision 1). Refused if another customer already has the same VAT ID or CRM contact — " +
+      "the refusal names it. " + VIES_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Customer name as printed on invoices" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: "string", description: "VAT ID (optional), e.g. ATU12345678" },
+        email: { type: "string", description: "Email (optional)" },
+        crm_contact_id: { type: "string", description: "The CRM contact this customer is made from (optional)" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["name", "address_lines", "country"],
+    },
+  },
+  {
+    name: "update_customer",
+    description:
+      "Change a customer's contact data — email and/or CRM contact (null removes it). Name, address, country and " +
+      "VAT ID are tax data and are refused here: use update_customer_tax_data.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: REVISION_FIELD,
+        email: { type: ["string", "null"], description: "New email, or null to remove" },
+        crm_contact_id: { type: ["string", "null"], description: "New CRM contact id, or null to remove" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["id", "revision"],
+    },
+  },
+  {
+    name: "update_customer_tax_data",
+    description:
+      "Replace a customer's tax data — name, address, country and VAT ID, all four required (uid: null removes the " +
+      "VAT ID). Invoices and credit notes already issued keep the data they were issued with. Submitting the same " +
+      "data again is refused, except for an EU VAT ID not yet confirmed by VIES: that re-runs the check. " + VIES_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: REVISION_FIELD,
+        name: { type: "string", description: "Customer name as printed on invoices" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: ["string", "null"], description: "VAT ID, or null for none" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["id", "revision", "name", "address_lines", "country", "uid"],
+    },
+  },
+  {
+    name: "check_vat_id",
+    description:
+      "Check a VAT ID without saving anything: format, the online VIES answer (asks ec.europa.eu, at most 4 s) and " +
+      "whether another customer already has it.",
+    inputSchema: {
+      type: "object",
+      properties: { country: COUNTRY_FIELD, uid: { type: "string", description: "VAT ID" } },
+      required: ["country", "uid"],
+    },
+  },
+  {
+    name: "preview_customer_change",
+    description:
+      "Show what update_customer_tax_data would change, without saving: changed fields, the tax treatment of future " +
+      "invoices before and after, documents already issued (they keep the old data), open quotes, and the VAT-ID check " +
+      "(asks ec.europa.eu).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        name: { type: "string", description: "Proposed name" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: ["string", "null"], description: "Proposed VAT ID; absent or null = none" },
+      },
+      required: ["id", "name", "address_lines", "country"],
+    },
+  },
+] as const;
+
+const CORE_TOOL_DEFINITIONS = [
   {
     name: "create_invoice",
     description:
@@ -250,6 +366,7 @@ const CORE_TOOL_DEFINITIONS = [
 ] as const;
 
 export const LOCAL_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
+  ...CUSTOMER_TOOL_DEFINITIONS,
   ...CORE_TOOL_DEFINITIONS,
   ...QUOTE_TOOL_DEFINITIONS,
   ...ITEM_TOOL_DEFINITIONS,

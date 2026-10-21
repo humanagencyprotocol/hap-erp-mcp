@@ -41,16 +41,14 @@ function monthRange(month: string): { from: string; to: string } {
 export async function collectExportRows(db: Db, month: string): Promise<ExportRow[]> {
   const { from, to } = monthRange(month);
 
-  const invoices = await db.all<LocalInvoiceRow & { customer_name?: string; customer_uid?: string; customer_country?: string }>(
-    `SELECT i.*, c.name as customer_name, c.uid as customer_uid, c.country as customer_country
-     FROM local_invoices i JOIN local_customers c ON c.id = i.customer_id
-     WHERE i.issued_at >= ? AND i.issued_at < ? ORDER BY i.issued_at`,
+  // Customer name, VAT ID and country come from each document's own snapshot
+  // (R1) — what it was issued to — never from the customer's current row.
+  const invoices = await db.all<LocalInvoiceRow>(
+    `SELECT * FROM local_invoices WHERE issued_at >= ? AND issued_at < ? ORDER BY issued_at`,
     [from, to]
   );
-  const creditNotes = await db.all<LocalCreditNoteRow & { customer_name?: string; customer_uid?: string; customer_country?: string }>(
-    `SELECT n.*, c.name as customer_name, c.uid as customer_uid, c.country as customer_country
-     FROM local_credit_notes n JOIN local_customers c ON c.id = n.customer_id
-     WHERE n.issued_at >= ? AND n.issued_at < ? ORDER BY n.issued_at`,
+  const creditNotes = await db.all<LocalCreditNoteRow>(
+    `SELECT * FROM local_credit_notes WHERE issued_at >= ? AND issued_at < ? ORDER BY issued_at`,
     [from, to]
   );
 

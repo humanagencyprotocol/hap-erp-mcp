@@ -41,7 +41,7 @@ import { archivePath, writeOnce, readAndVerify, sha256 as sha256Buffer } from ".
 import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
-import { requireLocalCustomer, type LocalCustomer } from "./customers.js";
+import { requireLocalCustomer, requireViesValidForReverseCharge, type LocalCustomer } from "./customers.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
 
 export interface LocalCtx {
@@ -371,6 +371,8 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
   // approved preview and the issued document could date-drift apart.
   requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
   await requireNumberUnused(db, prepared.number);
+  // D1 (Andreas, 2026-10-21): reverse charge only with a stored VIES `valid`.
+  if (prepared.taxMode === "reverse_charge") await requireViesValidForReverseCharge(db, prepared.customerId, "invoice");
 
   // Fixed, non-"now" issue instant — the document's own date at UTC midnight
   // — so re-rendering the same request (preview, then issue) is deterministic
@@ -479,6 +481,9 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   // A credit note corrects THAT invoice: it renders and stores the invoice's
   // snapshot, never the customer's current data (R1).
   const customer = snapshotFromRow(invoice);
+
+  // D1: a reverse-charge credit note needs the customer's stored VIES `valid` too.
+  if (invoice.tax_mode === "reverse_charge") await requireViesValidForReverseCharge(db, invoice.customer_id, "credit note");
 
   if (currency !== invoice.currency) refuse("currency", currency, invoice.currency, `Invoice ${invoice.number} is in ${invoice.currency}.`);
 

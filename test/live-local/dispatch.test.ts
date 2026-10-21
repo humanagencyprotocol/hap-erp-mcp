@@ -107,9 +107,29 @@ describe("live mode, adapter=local — tool availability", () => {
     expect(result).toEqual([]);
   });
 
+  it("customer writes get the VIES client built from env (ERP_VIES=off → saved as not checked, no call)", async () => {
+    await setup();
+    const env = { ...envFor(dataDir), ERP_VIES: "off" } as NodeJS.ProcessEnv;
+    const c = (await callTool(db, "live", "create_customer", {
+      name: "Kessler GmbH", address_lines: ["Hafenstraße 4"], country: "DE", uid: "DE123456789",
+    }, env)) as any;
+    expect(c.vies).toMatchObject({ status: "not_checked", reason: "VIES check switched off" });
+  });
+
+  it("customer writes call the VIES endpoint from ERP_VIES_URL (unreachable → not checked, still saved)", async () => {
+    await setup();
+    const env = { ...envFor(dataDir), ERP_VIES_URL: "http://127.0.0.1:1/vies", ERP_VIES_TIMEOUT_MS: "500" } as NodeJS.ProcessEnv;
+    const c = (await callTool(db, "live", "create_customer", {
+      name: "Kessler GmbH", address_lines: ["Hafenstraße 4"], country: "DE", uid: "DE123456789",
+    }, env)) as any;
+    expect(c.vies.status).toBe("not_checked");
+    expect(c.vies.reason).toMatch(/^VIES unreachable/);
+  });
+
   it("LOCAL_TOOL_NAMES matches exactly what the dispatcher accepts", () => {
     expect(LOCAL_TOOL_NAMES).toEqual([
-      "find_customers", "get_customer", "create_invoice", "preview_invoice", "create_credit_note",
+      "find_customers", "get_customer", "create_customer", "update_customer", "update_customer_tax_data",
+      "check_vat_id", "preview_customer_change", "create_invoice", "preview_invoice", "create_credit_note",
       "get_invoice", "list_invoices", "get_credit_note", "list_credit_notes", "get_document",
       ...QUOTE_TOOL_DEFINITIONS.map((d) => d.name),
       "list_items", "get_item", "create_item", "update_item", "update_item_price",
