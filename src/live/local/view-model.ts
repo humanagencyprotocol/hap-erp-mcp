@@ -19,10 +19,11 @@ export interface LineForTemplate extends PricedInvoiceLine {
 export interface BuildViewModelInput {
   company: LiveCompany;
   customer: { name: string; addressLines: string[]; uid: string | null };
-  documentKind: "invoice" | "credit_note";
+  documentKind: "invoice" | "credit_note" | "quote";
   number: string;
   issuedAt: Date;
-  servicePeriod: { from: string; to: string };
+  /** Invoices and credit notes always have one; a quote has none (`leistung` stays undefined). */
+  servicePeriod?: { from: string; to: string };
   lines: LineForTemplate[];
   netTotal: number;
   vatTotal: number;
@@ -34,11 +35,14 @@ export interface BuildViewModelInput {
   invoiceOnly?: { paymentTermDays: number; dueDate: Date };
   /** Required for dokument.art == "credit_note". */
   creditNoteOnly?: { invoiceNumber: string; invoiceIssuedAt: Date };
+  /** Required for dokument.art == "quote" (Part B): `angebot.{nummer, gueltig_bis, revision}`. */
+  quoteOnly?: { validUntil: string | null; revision: number };
 }
 
 export function buildViewModel(input: BuildViewModelInput): Record<string, unknown> {
   const { company, customer, documentKind, lines } = input;
   const isCreditNote = documentKind === "credit_note";
+  const isQuote = documentKind === "quote";
   // The signed-off samples show credit-note totals as negative (a reduction)
   // while each line stays positive (what the line itself is worth) — see
   // temp/invoice-sample/muster-gutschrift-storno.html.
@@ -50,20 +54,22 @@ export function buildViewModel(input: BuildViewModelInput): Record<string, unkno
       nummer: input.number,
       datum: formatDate(input.issuedAt),
     },
-    rechnung: isCreditNote
+    rechnung: isCreditNote || isQuote
       ? undefined
       : {
           nummer: input.number,
           zahlungsziel_tage: input.invoiceOnly!.paymentTermDays,
           faellig: formatDate(input.invoiceOnly!.dueDate),
         },
-    leistung: {
-      zeitraum: `${formatDate(input.servicePeriod.from)} – ${formatDate(input.servicePeriod.to)}`,
-      // A one-day service reads as a date ("Leistungsdatum"), not a range from
-      // a day to the same day — the template chooses via `when`.
-      datum: formatDate(input.servicePeriod.from),
-      ein_tag: input.servicePeriod.from === input.servicePeriod.to,
-    },
+    leistung: input.servicePeriod
+      ? {
+          zeitraum: `${formatDate(input.servicePeriod.from)} – ${formatDate(input.servicePeriod.to)}`,
+          // A one-day service reads as a date ("Leistungsdatum"), not a range from
+          // a day to the same day — the template chooses via `when`.
+          datum: formatDate(input.servicePeriod.from),
+          ein_tag: input.servicePeriod.from === input.servicePeriod.to,
+        }
+      : undefined,
     kunde: {
       name: customer.name,
       adresse: { mehrzeilig: [customer.name, ...customer.addressLines].join("\n") },
@@ -90,6 +96,16 @@ export function buildViewModel(input: BuildViewModelInput): Record<string, unkno
             nummer: input.creditNoteOnly!.invoiceNumber,
             datum: formatDate(input.creditNoteOnly!.invoiceIssuedAt),
           },
+        }
+      : undefined,
+    // A quote's own variables. `revision` is printed only from revision 2 on
+    // (the template's `when`), so a first quote reads like any offer.
+    angebot: isQuote
+      ? {
+          nummer: input.number,
+          gueltig_bis: input.quoteOnly!.validUntil ? formatDate(input.quoteOnly!.validUntil) : null,
+          revision: input.quoteOnly!.revision,
+          ist_revision: input.quoteOnly!.revision > 1,
         }
       : undefined,
     zahlung: { link: null }, // never populated in the PDF — payment link is email-only (decision 2026-10-17)

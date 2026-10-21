@@ -79,7 +79,24 @@ export function resolveTemplate(env: NodeJS.ProcessEnv = process.env): { templat
   return { template: loadTemplateFile(path), path };
 }
 
-export function requireDocumentSupported(template: InvoiceTemplate, kind: "invoice" | "credit_note"): void {
+/**
+ * Bundled default quote template (Part B, docs/local-production-contract.md
+ * §4.3). Resolved from its OWN env, ERP_QUOTE_TEMPLATE, so the invoice
+ * template and its default are never touched by quote work — no issued
+ * invoice can render differently because quotes exist.
+ */
+export const DEFAULT_QUOTE_TEMPLATE_PATH = join(findPackageRoot(__dirname), "templates", "angebot-de.v1.json");
+
+/** Resolves ERP_QUOTE_TEMPLATE, falling back to the bundled quote template. */
+export function resolveQuoteTemplate(env: NodeJS.ProcessEnv = process.env): { template: InvoiceTemplate; path: string } {
+  const configured = env.ERP_QUOTE_TEMPLATE?.trim();
+  const path = configured ? expandHome(configured) : DEFAULT_QUOTE_TEMPLATE_PATH;
+  return { template: loadTemplateFile(path), path };
+}
+
+export type DocumentKind = "invoice" | "credit_note" | "quote";
+
+export function requireDocumentSupported(template: InvoiceTemplate, kind: DocumentKind): void {
   if (!template.documents.includes(kind)) {
     throw new Error(`Refused: template "${template.template}" v${template.version} does not support document kind "${kind}".`);
   }

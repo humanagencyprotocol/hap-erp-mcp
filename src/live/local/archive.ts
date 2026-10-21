@@ -21,6 +21,16 @@ export function archivePath(dataDir: string, year: number, number: string): stri
   return join(archiveDir(dataDir), String(year), `${number}.pdf`);
 }
 
+/**
+ * Quotes (Part B): their own directory, never the invoices' year directories —
+ * a quote number lives in its own series and must never be able to collide
+ * with an invoice or credit-note file. One write-once file per revision:
+ * <dataDir>/erp-local-archive/quotes/<year>/<number>-r<revision>.pdf
+ */
+export function quoteArchivePath(dataDir: string, year: number, number: string, revision: number): string {
+  return join(archiveDir(dataDir), "quotes", String(year), `${number}-r${revision}.pdf`);
+}
+
 export function sha256(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }

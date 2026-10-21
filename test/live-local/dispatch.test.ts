@@ -92,10 +92,10 @@ describe("live mode, adapter=local — tool availability", () => {
     }
   });
 
-  it("refuses every quote/order tool — none of that exists in local live invoicing", async () => {
+  it("refuses send_quote / convert_quote_to_order and every order tool — Local has no send step and no orders (D3)", async () => {
     await setup();
     const env = envFor(dataDir);
-    for (const name of ["create_quote", "update_quote", "send_quote", "convert_quote_to_order", "list_quotes", "get_quote", "list_orders", "get_order"]) {
+    for (const name of ["send_quote", "convert_quote_to_order", "list_orders", "get_order"]) {
       await expect(callTool(db, "live", name, {}, env)).rejects.toThrow(/not available in local live mode/);
     }
   });
@@ -143,9 +143,10 @@ describe("local tool registry (contract §9, A1)", () => {
     expect(new Set(LOCAL_TOOL_NAMES).size).toBe(LOCAL_TOOL_NAMES.length);
   });
 
-  it("the quote area is an empty stub until Part B lands", () => {
-    expect(QUOTE_TOOL_DEFINITIONS).toEqual([]);
-    expect(Object.keys(QUOTE_TOOL_HANDLERS)).toEqual([]);
+  it("the quote area (Part B) defines and handles the same five tools", () => {
+    const names = ["list_quotes", "get_quote", "create_quote", "update_quote", "preview_quote"];
+    expect(QUOTE_TOOL_DEFINITIONS.map((d) => d.name)).toEqual(names);
+    expect(Object.keys(QUOTE_TOOL_HANDLERS)).toEqual(names);
   });
 
   it("the item area (Part C) defines and handles the same five tools", () => {
