@@ -39,8 +39,21 @@ describe("refuseIfInvalidTaxMode", () => {
     expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: "DE", customerUid: null }, 1000)).toThrow(/UID/);
   });
 
-  it("does not refuse a non-EU customer with no UID, below €10,000", () => {
-    expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: "CH", customerUid: null }, 1000)).not.toThrow();
+  // Andreas's decision on review finding 3 (option A): outside the EU VAT area
+  // is refused, with or without a VAT ID (consumer case: see tax.ts).
+  it("refuses a customer outside the EU VAT area — CH, GB, US, XI — with or without a VAT ID", () => {
+    for (const country of ["CH", "GB", "US", "XI", "xi"]) {
+      for (const uid of [null, `${country}123456789`]) {
+        expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: country, customerUid: uid }, 1000)).toThrow(
+          `Refused: Tax treatment for customers outside the EU is not supported yet (customer country ${country}) — nothing was issued.`
+        );
+      }
+    }
+  });
+
+  it("home country and EU customers are unchanged", () => {
+    expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: "AT", customerUid: null }, 1000)).not.toThrow();
+    expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: "DE", customerUid: "DE123456789" }, 1000)).not.toThrow();
   });
 
   it("refuses any customer with no UID once the gross total exceeds €10,000", () => {

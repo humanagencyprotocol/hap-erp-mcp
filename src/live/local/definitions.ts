@@ -1,4 +1,21 @@
-/** The MCP tool surface for live mode's "local" adapter — kept separate from the simulation's surface. */
+/**
+ * The MCP tool surface for live mode's "local" adapter — kept separate from
+ * the simulation's surface. A registry: each area (core invoicing +
+ * customers here, quotes in definitions-quotes.ts, catalogue items in
+ * definitions-items.ts) owns its own list; LOCAL_TOOL_DEFINITIONS merges
+ * them, and dispatch.ts merges the matching handlers
+ * (docs/local-production-contract.md §9).
+ */
+import { QUOTE_TOOL_DEFINITIONS } from "./definitions-quotes.js";
+import { ITEM_TOOL_DEFINITIONS, LINE_ITEM_ID_FIELD, LINE_ITEM_REVISION_FIELD } from "./definitions-items.js";
+
+export interface LocalToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: { type: "object"; properties: Record<string, unknown>; required: readonly string[] };
+  outputSchema?: Record<string, unknown>;
+}
+
 const TICKET_FIELD = {
   type: "string" as const,
   description: "Authorization reference for this call, set by the governing gateway — agents do not set this.",
@@ -7,6 +24,8 @@ const TICKET_FIELD = {
 const LOCAL_LINE_SCHEMA = {
   type: "object" as const,
   properties: {
+    item_id: LINE_ITEM_ID_FIELD,
+    item_revision: LINE_ITEM_REVISION_FIELD,
     description: { type: "string", description: "Line description" },
     qty: { type: "number", description: "Quantity (positive)" },
     unit: { type: "string", description: "Unit label (optional, default \"Stk.\")" },
@@ -34,6 +53,29 @@ const DOCUMENT_DATE_FIELD = {
     "The document's date (ISO \"YYYY-MM-DD\"), printed on it and used to compute the due date. Required. " +
     "create_invoice and create_credit_note refuse a date that is not today in the company's own calendar " +
     "(see the company file's timezone, default Europe/Vienna) — propose the call again with today's date.",
+};
+
+// Optional on create_invoice / preview_invoice (contract §3.6): the governing
+// layer passes the customer revision the approval was shown, so a customer
+// change between approval and execution refuses instead of issuing.
+const CUSTOMER_REVISION_FIELD = {
+  type: "number" as const,
+  description:
+    "Revision of the customer this request was prepared for (optional). If given and the customer has " +
+    "changed since, the call is refused naming both revisions.",
+};
+
+// Optional on create_invoice / preview_invoice (Part B, contract §4.4): invoice
+// an issued quote. Both or neither; lines may be omitted to take the quote's.
+const QUOTE_ID_FIELD = {
+  type: "string" as const,
+  description:
+    "Quote to invoice (ID or number; optional, with quote_revision). Omit lines to invoice the quote's lines. Refused " +
+    "if the quote was already invoiced, has moved to another revision, or the customer's data changed since it was quoted.",
+};
+const QUOTE_REVISION_FIELD = {
+  type: "number" as const,
+  description: "Revision of the quote being invoiced (required with quote_id) — must be the quote's current revision.",
 };
 
 const PREVIEW_DOCUMENT_DATE_FIELD = {
@@ -65,14 +107,115 @@ const PREVIEW_INVOICE_OUTPUT_SCHEMA = {
   required: [...DOCUMENT_OUTPUT_SCHEMA.required, "pages"],
 };
 
-export const LOCAL_TOOL_DEFINITIONS = [
+// Customers (docs/local-production-contract.md §3). Writes are each their own
+// decision: contact data, tax data (name, address, country, VAT ID) and new
+// customers. check_vat_id / preview_customer_change / check_customer_duplicates
+// are card-only reads.
+const CUSTOMER_ADDRESS_FIELD = {
+  type: "array" as const,
+  items: { type: "string" },
+  description: "Address lines printed under the name (street, zip + city, …) — at least one",
+};
+const COUNTRY_FIELD = { type: "string" as const, description: "ISO 3166-1 alpha-2 country code, e.g. AT" };
+const REVISION_FIELD = {
+  type: "number" as const,
+  description: "The customer's current revision (from get_customer) — the change is refused if the customer has changed since.",
+};
+const VIES_NOTE =
+  "A VAT ID of an EU member state (or XI, Northern Ireland) is checked online against the European Commission's VIES " +
+  "service when saved — this sends the customer's country and VAT ID, and the company's own VAT ID, to ec.europa.eu. " +
+  "A VAT ID VIES reports as not valid is refused; if VIES is unreachable the customer is saved with the VAT ID marked " +
+  "not checked.";
+
+// Structured results (structuredContent) of the customer tools — so a governing
+// layer reads them generically, without parsing the text content.
+const NULLABLE_STRING = { type: ["string", "null"] };
+const VIES_RESULT_SCHEMA = {
+  type: "object",
+  title: "VIES result",
+  properties: {
+    status: { type: "string", title: "Status" },
+    reason: { ...NULLABLE_STRING, title: "Reason" },
+    checked_at: { ...NULLABLE_STRING, title: "Checked at" },
+    request_id: { ...NULLABLE_STRING, title: "VIES request id" },
+    name: { ...NULLABLE_STRING, title: "Name at VIES" },
+    address: { ...NULLABLE_STRING, title: "Address at VIES" },
+  },
+  required: ["status"],
+};
+const CUSTOMER_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Customer",
+  properties: {
+    id: { type: "string", title: "Customer ID" },
+    name: { type: "string", title: "Name" },
+    address_lines: { type: "array", items: { type: "string" }, title: "Address" },
+    country: { type: "string", title: "Country" },
+    uid: { ...NULLABLE_STRING, title: "VAT ID" },
+    email: { ...NULLABLE_STRING, title: "Email" },
+    crm_contact_id: { ...NULLABLE_STRING, title: "CRM contact" },
+    revision: { type: "number", title: "Revision" },
+    vies: { anyOf: [VIES_RESULT_SCHEMA, { type: "null" }], title: "Last VIES check" },
+    vies_status: { ...NULLABLE_STRING, title: "VIES status" },
+    tax_mode: { type: "string", title: "Tax mode" },
+    tax_mode_label: { type: "string", title: "Tax treatment" },
+    created_at: { ...NULLABLE_STRING, title: "Created" },
+    updated_at: { ...NULLABLE_STRING, title: "Updated" },
+  },
+  required: ["id", "name", "address_lines", "country", "revision"],
+};
+const VAT_CHECK_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "VAT ID check",
+  properties: {
+    uid: { type: "string", title: "VAT ID" },
+    format: { type: "string", title: "Format" },
+    vies: VIES_RESULT_SCHEMA,
+    duplicate: { type: "boolean", title: "Another customer has it" },
+    duplicate_of: { ...NULLABLE_STRING, title: "Customer with this VAT ID" },
+  },
+  required: ["uid", "format", "vies", "duplicate", "duplicate_of"],
+};
+const PREVIEW_CUSTOMER_CHANGE_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Customer change preview",
+  properties: {
+    current: { type: "object", title: "Current tax data" },
+    revision: { type: "number", title: "Revision" },
+    changed: { type: "array", items: { type: "string" }, title: "Changed fields" },
+    uid_or_country_changed: { type: "boolean", title: "VAT ID or country changed" },
+    tax_mode: { type: "object", title: "Tax treatment before / after" },
+    issued_documents: { type: "object", title: "Documents already issued" },
+    open_quotes: { type: "number", title: "Open quotes" },
+    vat_check: { anyOf: [VAT_CHECK_OUTPUT_SCHEMA, { type: "null" }], title: "VAT ID check" },
+  },
+  required: ["current", "revision", "changed", "uid_or_country_changed", "tax_mode", "issued_documents", "open_quotes", "vat_check"],
+};
+const CUSTOMER_DUPLICATES_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Duplicate check",
+  properties: {
+    uid: { ...NULLABLE_STRING, title: "VAT ID (normalised)" },
+    crm_contact_id: { ...NULLABLE_STRING, title: "CRM contact (normalised)" },
+    vat_duplicate_of: { ...NULLABLE_STRING, title: "Customer with this VAT ID" },
+    crm_contact_duplicate_of: { ...NULLABLE_STRING, title: "Customer with this CRM contact" },
+  },
+  required: ["uid", "crm_contact_id", "vat_duplicate_of", "crm_contact_duplicate_of"],
+};
+
+const CUSTOMER_TOOL_DEFINITIONS = [
   {
     name: "find_customers",
-    description: "Search this company's own customers by name or email",
+    description:
+      "Search this company's own customers by name or email, or find one exactly by VAT ID (`uid`) or CRM contact " +
+      "(`crm_contact_id`) — check this before create_customer: a VAT ID or CRM contact can belong to only one customer. " +
+      "Each result carries `tax_mode`, `tax_mode_label` and `vies_status` as get_customer does.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Text search across name and email" },
+        uid: { type: "string", description: "Exact VAT ID (spaces, dots and dashes are ignored)" },
+        crm_contact_id: { type: "string", description: "Exact CRM contact id" },
         limit: { type: "number", description: "Maximum results to return (default: 50)" },
       },
       required: [],
@@ -80,13 +223,132 @@ export const LOCAL_TOOL_DEFINITIONS = [
   },
   {
     name: "get_customer",
-    description: "Get a single customer (name, address, country, UID, email)",
+    description:
+      "Get a single customer (name, address, country, VAT ID, email, CRM contact, revision, last VIES check as " +
+      "`vies` and `vies_status`), plus `tax_mode` / `tax_mode_label`: the tax treatment a new invoice to this customer " +
+      "would get now (\"unsupported\" for a customer outside the EU VAT area: invoices and quotes to it are refused). " +
+      "A reverse-charge invoice is issued only if `vies_status` is \"valid\". " +
+      "With `revision`, returns that older revision's content (no VIES result is kept for old revisions).",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", description: "Customer ID" } },
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: { type: "number", description: "An older revision to read (optional)" },
+      },
       required: ["id"],
     },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
   },
+  {
+    name: "create_customer",
+    description:
+      "Create a customer (revision 1). Refused if another customer already has the same VAT ID or CRM contact — " +
+      "the refusal names it. " + VIES_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Customer name as printed on invoices" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: "string", description: "VAT ID (optional), e.g. ATU12345678" },
+        email: { type: "string", description: "Email (optional)" },
+        crm_contact_id: { type: "string", description: "The CRM contact this customer is made from (optional)" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["name", "address_lines", "country"],
+    },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
+  },
+  {
+    name: "update_customer",
+    description:
+      "Change a customer's contact data — email and/or CRM contact (null removes it). Name, address, country and " +
+      "VAT ID are tax data and are refused here: use update_customer_tax_data.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: REVISION_FIELD,
+        email: { type: ["string", "null"], description: "New email, or null to remove" },
+        crm_contact_id: { type: ["string", "null"], description: "New CRM contact id, or null to remove" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["id", "revision"],
+    },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
+  },
+  {
+    name: "update_customer_tax_data",
+    description:
+      "Replace a customer's tax data — name, address, country and VAT ID, all four required (uid: null removes the " +
+      "VAT ID). Invoices and credit notes already issued keep the data they were issued with. Submitting the same " +
+      "data again is refused, except for an EU VAT ID not yet confirmed by VIES: that re-runs the check. " + VIES_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        revision: REVISION_FIELD,
+        name: { type: "string", description: "Customer name as printed on invoices" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: ["string", "null"], description: "VAT ID, or null for none" },
+        ticket_id: TICKET_FIELD,
+      },
+      required: ["id", "revision", "name", "address_lines", "country", "uid"],
+    },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
+  },
+  {
+    name: "check_vat_id",
+    description:
+      "Check a VAT ID without saving anything: format, the online VIES answer (asks ec.europa.eu, at most 4 s) and " +
+      "whether another customer already has it.",
+    inputSchema: {
+      type: "object",
+      properties: { country: COUNTRY_FIELD, uid: { type: "string", description: "VAT ID" } },
+      required: ["country", "uid"],
+    },
+    outputSchema: VAT_CHECK_OUTPUT_SCHEMA,
+  },
+  {
+    name: "preview_customer_change",
+    description:
+      "Show what update_customer_tax_data would change, without saving: changed fields, the tax treatment of future " +
+      "invoices before and after, documents already issued (they keep the old data), open quotes, and the VAT-ID check " +
+      "(asks ec.europa.eu).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Customer ID" },
+        name: { type: "string", description: "Proposed name" },
+        address_lines: CUSTOMER_ADDRESS_FIELD,
+        country: COUNTRY_FIELD,
+        uid: { type: ["string", "null"], description: "Proposed VAT ID; absent or null = none" },
+      },
+      required: ["id", "name", "address_lines", "country"],
+    },
+    outputSchema: PREVIEW_CUSTOMER_CHANGE_OUTPUT_SCHEMA,
+  },
+  {
+    name: "check_customer_duplicates",
+    description:
+      "Check, without saving anything, whether another customer already has this VAT ID and/or CRM contact — the " +
+      "same comparison create_customer / update_customer refuse on (VAT ID: spaces, dots, dashes and case ignored; " +
+      "CRM contact: surrounding spaces and case ignored). Returns the customer id holding each, or null.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uid: { type: "string", description: "VAT ID to check (optional)" },
+        crm_contact_id: { type: "string", description: "CRM contact id to check (optional)" },
+        id: { type: "string", description: "The customer being changed — not counted as its own duplicate (optional)" },
+      },
+      required: [],
+    },
+    outputSchema: CUSTOMER_DUPLICATES_OUTPUT_SCHEMA,
+  },
+] as const;
+
+const CORE_TOOL_DEFINITIONS = [
   {
     name: "create_invoice",
     description:
@@ -100,17 +362,20 @@ export const LOCAL_TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
+        customer_revision: CUSTOMER_REVISION_FIELD,
+        quote_id: QUOTE_ID_FIELD,
+        quote_revision: QUOTE_REVISION_FIELD,
         number: { type: "string", description: "Invoice number — required, comes with the request" },
         document_date: DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
-        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
+        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required, unless quote_id is given — then omit to invoice the quote's lines)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
         currency: { type: "string", description: "Must be EUR" },
         payment_term_days: { type: "number", description: "Days until due, from issue (optional, defaults to the company's own setting)" },
         memo: { type: "string", description: "Free-form note (optional)" },
         ticket_id: TICKET_FIELD,
       },
-      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "net_total", "currency"],
     },
   },
   {
@@ -122,16 +387,19 @@ export const LOCAL_TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         customer_id: { type: "string", description: "Customer ID" },
+        customer_revision: CUSTOMER_REVISION_FIELD,
+        quote_id: QUOTE_ID_FIELD,
+        quote_revision: QUOTE_REVISION_FIELD,
         number: { type: "string", description: "Invoice number as it would appear on the rendered PDF" },
         document_date: PREVIEW_DOCUMENT_DATE_FIELD,
         service_period: SERVICE_PERIOD_SCHEMA,
-        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required)" },
+        lines: { type: "array", items: LOCAL_LINE_SCHEMA, description: "Invoice lines (required, unless quote_id is given — then omit to invoice the quote's lines)" },
         net_total: { type: "number", description: "Declared net total — must equal sum(qty*unit_price) over the lines" },
         currency: { type: "string", description: "Must be EUR" },
         payment_term_days: { type: "number", description: "Days until due, from issue (optional)" },
         memo: { type: "string", description: "Free-form note (optional)" },
       },
-      required: ["customer_id", "number", "document_date", "service_period", "lines", "net_total", "currency"],
+      required: ["customer_id", "number", "document_date", "service_period", "net_total", "currency"],
     },
     outputSchema: PREVIEW_INVOICE_OUTPUT_SCHEMA,
   },
@@ -159,7 +427,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
   },
   {
     name: "get_invoice",
-    description: "Get a single invoice with its lines. Accepts the invoice ID or its number.",
+    description: "Get a single invoice with its lines and the customer data as issued (`customer`). Accepts the invoice ID or its number.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string", description: "Invoice ID or number" } },
@@ -181,7 +449,7 @@ export const LOCAL_TOOL_DEFINITIONS = [
   },
   {
     name: "get_credit_note",
-    description: "Get a single credit note with its lines",
+    description: "Get a single credit note with its lines and the customer data as issued (`customer`)",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string", description: "Credit note ID or number" } },
@@ -204,16 +472,23 @@ export const LOCAL_TOOL_DEFINITIONS = [
   {
     name: "get_document",
     description:
-      "Read an issued invoice or credit note PDF from the archive. Verifies the file's sha256 against the " +
+      "Read an issued invoice, credit note or quote PDF from the archive (a quote: its current revision). Verifies the file's sha256 against the " +
       "fingerprint stored at issue time and refuses to return it if they no longer match.",
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["invoice-pdf", "credit-note-pdf"], description: "Which document to read" },
-        id: { type: "string", description: "Invoice or credit note ID (or number)" },
+        kind: { type: "string", enum: ["invoice-pdf", "credit-note-pdf", "quote-pdf"], description: "Which document to read" },
+        id: { type: "string", description: "Invoice, credit note or quote ID (or number)" },
       },
       required: ["kind", "id"],
     },
     outputSchema: DOCUMENT_OUTPUT_SCHEMA,
   },
 ] as const;
+
+export const LOCAL_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
+  ...CUSTOMER_TOOL_DEFINITIONS,
+  ...CORE_TOOL_DEFINITIONS,
+  ...QUOTE_TOOL_DEFINITIONS,
+  ...ITEM_TOOL_DEFINITIONS,
+];

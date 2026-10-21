@@ -17,6 +17,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { createLocalDb } from "../../src/live/local/db.js";
 import { addCustomer } from "../../src/live/local/tools/customers.js";
 import { todayInTimezone } from "../../src/live/local/date.js";
+import { LOCAL_TOOL_NAMES } from "../../src/live/local/dispatch.js";
 
 const bin = join(__dirname, "..", "..", "dist", "index.js");
 
@@ -36,7 +37,7 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), "erp-local-outputschema-"));
   writeFileSync(join(dataDir, "company.json"), JSON.stringify(MUSTER_COMPANY_JSON));
 
-  // Seed a customer directly (the AI has no tool to create one — see customers.test.ts).
+  // Seed a customer directly through the CLI path (no VIES call in this test).
   const dbPath = join(dataDir, "erp-local.sqlite");
   const seedDb = await createLocalDb(dbPath);
   const customer = await addCustomer(seedDb, {
@@ -144,5 +145,24 @@ describe("other local tools carry no structuredContent — scoped to preview_inv
 
     const result: any = await client.callTool({ name: "list_invoices", arguments: {} });
     expect(result.structuredContent).toBeUndefined();
+  });
+});
+
+describe("registry and snapshot over the real stdio wire (A1)", () => {
+  it("tools/list serves exactly the merged registry", async () => {
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual([...LOCAL_TOOL_NAMES]);
+  });
+
+  it("get_invoice carries the customer snapshot in structuredContent and text", async () => {
+    const created: any = await client.callTool({ name: "create_invoice", arguments: { ...invoiceArgs("2026-9003"), customer_revision: 1 } });
+    expect(created.isError).toBeFalsy();
+    const result: any = await client.callTool({ name: "get_invoice", arguments: { id: "2026-9003" } });
+    const expected = {
+      name: "Drautal Maschinenbau GmbH", address_lines: ["Industriestraße 12", "9800 Spittal an der Drau", "Österreich"],
+      country: "AT", uid: "ATU12345678", revision: 1, source: "issued",
+    };
+    expect(JSON.parse(result.content[0].text).customer).toEqual(expected);
+    expect(result.structuredContent.customer).toEqual(expected);
   });
 });

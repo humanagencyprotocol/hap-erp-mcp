@@ -1,0 +1,222 @@
+{
+  "template": "angebot-de",
+  "version": "1",
+  "language": "de-AT",
+  "documents": [
+    "quote"
+  ],
+  "notes": "Quote template (docs/local-production-contract.md §4.3). Variables as the invoice template (firma, kunde, positionen, summe, steuer, dokument) plus angebot.nummer, angebot.gueltig_bis (DD.MM.YYYY or null), angebot.revision (integer, 1 for a first quote) and angebot.ist_revision (true from revision 2). rechnung, gutschrift and leistung are undefined for a quote. steuer.art is the tax mode an invoice to this customer would have on the quote's date.",
+  "page": {
+    "size": "A4",
+    "margins_mm": [
+      18,
+      18,
+      20,
+      18
+    ],
+    "font": "Helvetica",
+    "font_size": 10,
+    "line_height": 1.3
+  },
+  "texts": {
+    "title.quote": "Angebot",
+    "label.number.quote": "Angebotsnummer",
+    "label.date": "Datum",
+    "label.revision": "Revision",
+    "label.valid_until": "Gültig bis",
+    "label.customer_uid": "Ihre UID",
+    "label.own_uid": "Unsere UID",
+    "col.pos": "Pos.",
+    "col.description": "Leistung",
+    "col.qty": "Menge",
+    "col.unit_price": "Einzelpreis netto",
+    "col.total": "Gesamt netto",
+    "sum.net": "Summe netto",
+    "sum.vat": "USt {{steuer.satz}} %",
+    "sum.vat_none": "USt",
+    "sum.gross.quote": "Angebotssumme",
+    "intro.quote": "Wir bieten Ihnen an:",
+    "note.reverse_charge": "Die Rechnung wird ohne Umsatzsteuer gestellt: Übergang der Steuerschuld auf den Leistungsempfänger (Reverse Charge).",
+    "note.small_business": "Umsatzsteuerbefreit – Kleinunternehmer gem. § 6 Abs. 1 Z 27 UStG.",
+    "validity.quote": "Dieses Angebot gilt bis {{angebot.gueltig_bis}}.",
+    "closing.quote": "Wir freuen uns auf Ihren Auftrag."
+  },
+  "blocks": [
+    {
+      "type": "letterhead",
+      "left": [
+        "{{firma.name}}"
+      ],
+      "right": [
+        "{{firma.email}}",
+        "{{firma.web}}"
+      ],
+      "logo": "firma.logo_svg",
+      "logo_width": 140
+    },
+    {
+      "type": "sender_line",
+      "text": "{{firma.inhaber}} · {{firma.adresse.einzeilig}}"
+    },
+    {
+      "type": "address_and_meta",
+      "address": "{{kunde.adresse.mehrzeilig}}",
+      "meta": [
+        [
+          "label.number.{{dokument.art}}",
+          "{{dokument.nummer}}"
+        ],
+        {
+          "when": "angebot.ist_revision",
+          "row": [
+            "label.revision",
+            "{{angebot.revision}}"
+          ]
+        },
+        [
+          "label.date",
+          "{{dokument.datum}}"
+        ],
+        {
+          "when": "angebot.gueltig_bis",
+          "row": [
+            "label.valid_until",
+            "{{angebot.gueltig_bis}}"
+          ]
+        },
+        {
+          "when": "kunde.uid",
+          "row": [
+            "label.customer_uid",
+            "{{kunde.uid}}"
+          ]
+        },
+        [
+          "label.own_uid",
+          "{{firma.uid}}"
+        ]
+      ],
+      "row_padding": 2,
+      "space_before": 6
+    },
+    {
+      "type": "heading",
+      "text": "title.{{dokument.art}}"
+    },
+    {
+      "type": "paragraph",
+      "text": "intro.{{dokument.art}}"
+    },
+    {
+      "type": "lines_table",
+      "rows": "positionen",
+      "columns": [
+        {
+          "head": "col.pos",
+          "value": "{{pos.nr}}",
+          "width": 22
+        },
+        {
+          "head": "col.description",
+          "value": "{{pos.beschreibung}}",
+          "width": "*"
+        },
+        {
+          "head": "col.qty",
+          "value": "{{pos.menge}} {{pos.einheit}}",
+          "align": "right",
+          "width": 58
+        },
+        {
+          "head": "col.unit_price",
+          "value": "{{pos.einzelpreis|money}}",
+          "align": "right",
+          "width": 78
+        },
+        {
+          "head": "col.total",
+          "value": "{{pos.gesamt|money}}",
+          "align": "right",
+          "width": 78
+        }
+      ],
+      "row_padding": 6,
+      "space_before": 8
+    },
+    {
+      "type": "totals",
+      "rows": [
+        [
+          "sum.net",
+          "{{summe.netto|money}}"
+        ],
+        {
+          "when": "steuer.art == 'normal'",
+          "row": [
+            "sum.vat",
+            "{{summe.ust|money}}"
+          ]
+        },
+        {
+          "when": "steuer.art != 'normal'",
+          "row": [
+            "sum.vat_none",
+            "{{summe.ust|money}}"
+          ]
+        },
+        {
+          "row": [
+            "sum.gross.{{dokument.art}}",
+            "{{summe.brutto|money}}"
+          ],
+          "strong": true
+        }
+      ],
+      "row_padding": 3,
+      "space_before": 10,
+      "rule_gap": 5,
+      "full_width": true
+    },
+    {
+      "type": "note",
+      "when": "steuer.art == 'reverse_charge'",
+      "text": "note.reverse_charge",
+      "framed": true,
+      "space_before": 12
+    },
+    {
+      "type": "note",
+      "when": "steuer.art == 'kleinunternehmer'",
+      "text": "note.small_business",
+      "space_before": 12
+    },
+    {
+      "type": "paragraph",
+      "when": "angebot.gueltig_bis",
+      "text": "validity.quote",
+      "space_before": 18
+    },
+    {
+      "type": "paragraph",
+      "text": "closing.quote",
+      "space_before": 6
+    },
+    {
+      "type": "footer",
+      "columns": [
+        [
+          "{{firma.name}} · {{firma.inhaber}}",
+          "{{firma.adresse.einzeilig}}"
+        ],
+        [
+          "UID: {{firma.uid}}",
+          "{{firma.register}}"
+        ],
+        [
+          "Bank: {{firma.bank.name}}",
+          "IBAN: {{firma.bank.iban}} · BIC: {{firma.bank.bic}}"
+        ]
+      ]
+    }
+  ]
+}

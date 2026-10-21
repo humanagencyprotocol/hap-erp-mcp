@@ -5,16 +5,17 @@
  *   erp-mcp export                              everything needed to line up trigger → ticket → effect (changes + refusals)
  *   erp-mcp scenario next <file>                hand over the next request, record when
  *   erp-mcp scenario status <file>              which requests were handed over, which are pending
- *   erp-mcp customers add <json>                live/local mode: add one customer — the AI has no tool to do this
+ *   erp-mcp customers add <json>                live/local mode: add one customer (revision 1, no VIES check — the person typing it decides)
  *   erp-mcp customers list                      live/local mode: list customers
  *   erp-mcp customers import <file>              live/local mode: import customers from a JSON array file, all-or-nothing
+ *   erp-mcp customers clear-uid <id>             live/local mode: remove one customer's VAT ID (resolves a duplicate VAT ID)
  *   erp-mcp export-invoices --month YYYY-MM --out <dir>   live/local mode: CSV + archived PDFs for the tax advisor
  */
 import { readFileSync } from "fs";
 import { createDb, type Db } from "./db.js";
 import { getMode, getLiveAdapter } from "./mode.js";
 import { createLocalDb, resolveLocalDbPath } from "./live/local/db.js";
-import { addCustomer, importCustomers, listCustomersForCli } from "./live/local/tools/customers.js";
+import { addCustomer, importCustomers, listCustomersForCli, clearCustomerUid } from "./live/local/tools/customers.js";
 import { exportInvoicesToDir } from "./live/local/export.js";
 
 export interface ScenarioRequest {
@@ -77,6 +78,7 @@ export async function exportRecord(db: Db, mode = getMode()) {
 const USAGE =
   "usage: erp-mcp export | erp-mcp scenario next <file> | erp-mcp scenario status <file> | " +
   "erp-mcp customers add <json> | erp-mcp customers list | erp-mcp customers import <file> | " +
+  "erp-mcp customers clear-uid <id> | " +
   "erp-mcp export-invoices --month YYYY-MM --out <dir>";
 
 /** live/local mode only — refuses clearly otherwise rather than silently touching the simulation's database. */
@@ -140,6 +142,14 @@ export async function runCli(argv: string[]): Promise<number> {
       const list = JSON.parse(readFileSync(file, "utf8"));
       const created = await importCustomers(db, list);
       process.stdout.write(`Imported ${created.length} customer(s).\n`);
+      await db.close();
+      return 0;
+    }
+    if (cmd === "customers" && sub === "clear-uid" && file) {
+      requireLocalMode();
+      const db = await createLocalDb(resolveLocalDbPath());
+      const updated = await clearCustomerUid(db, file);
+      process.stdout.write(JSON.stringify(updated, null, 2) + "\n");
       await db.close();
       return 0;
     }
