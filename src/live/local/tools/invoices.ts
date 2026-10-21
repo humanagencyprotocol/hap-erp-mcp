@@ -246,16 +246,24 @@ async function requireNumberUnused(db: Db, number: string): Promise<void> {
 /**
  * id first; a number only when no document has that id. An id that is also
  * another document's number is ambiguous and refused (review finding 10) —
- * the document number pattern allows a UUID-shaped number.
+ * the document number pattern allows a UUID-shaped number. The number match
+ * is case-insensitive, like the uniqueness rule (F4): numbers are unique
+ * ignoring case, so `r-1` names the document numbered `R-1` and nothing else.
+ * Every id-or-number read (get_invoice, get_credit_note, get_quote,
+ * get_document, credit/convert lookups) goes through here.
  */
 export async function requireByIdOrNumber<T extends { id: string; number: string }>(
   db: Db, table: "local_invoices" | "local_credit_notes" | "local_quotes", idOrNumber: string, what: string
 ): Promise<T> {
-  const rows = await db.all<T>(`SELECT * FROM ${table} WHERE id = ? OR number = ?`, [idOrNumber, idOrNumber]);
+  if (typeof idOrNumber !== "string" || !idOrNumber) throw new Error(`id is required (${what} id or number)`);
+  const rows = await db.all<T>(`SELECT * FROM ${table} WHERE id = ? OR lower(number) = lower(?)`, [idOrNumber, idOrNumber]);
   if (rows.length === 0) throw new Error(`Unknown ${what} id: ${idOrNumber}`);
   if (rows.length > 1) {
-    const byId = rows.find((r) => r.id === idOrNumber)!;
-    const byNumber = rows.find((r) => r.id !== idOrNumber)!;
+    const byId = rows.find((r) => r.id === idOrNumber);
+    const byNumber = rows.find((r) => r.id !== idOrNumber);
+    if (!byId || !byNumber) {
+      throw new Error(`Refused: ${JSON.stringify(idOrNumber)} matches more than one ${what} number (${rows.map((r) => r.number).join(", ")}).`);
+    }
     throw new Error(
       `Refused: ${JSON.stringify(idOrNumber)} is ambiguous — it is the id of ${what} ${byId.number} and the number of ` +
         `another ${what} (id ${byNumber.id}). Ask for ${byId.number} by its number, or the other one by its id.`
@@ -609,10 +617,9 @@ async function markQuoteConverted(db: Db, conversion: QuoteConversion, invoiceId
 
 // --- Credit notes ---
 
-async function creditNoteWithLines(db: Db, id: string) {
-  const row = await db.get<LocalCreditNoteRow>("SELECT * FROM local_credit_notes WHERE id = ?", [id]);
-  if (!row) throw new Error(`Unknown credit note id: ${id}`);
-  const lines = await db.all<any>("SELECT * FROM local_credit_note_lines WHERE credit_note_id = ? ORDER BY rowid", [id]);
+async function creditNoteWithLines(db: Db, idOrNumber: string) {
+  const row = await requireByIdOrNumber<LocalCreditNoteRow>(db, "local_credit_notes", idOrNumber, "credit note");
+  const lines = await db.all<any>("SELECT * FROM local_credit_note_lines WHERE credit_note_id = ? ORDER BY rowid", [row.id]);
   return { ...withCustomerSnapshot(row), lines };
 }
 

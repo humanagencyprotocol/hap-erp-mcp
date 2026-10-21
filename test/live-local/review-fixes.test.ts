@@ -13,7 +13,7 @@ import { callLocalTool } from "../../src/live/local/dispatch.js";
 import { parentDirOf } from "../../src/live/local/archive.js";
 import { requireSafeDocumentNumber, isSafeDocumentNumber } from "../../src/live/local/document-number.js";
 import {
-  create_invoice, create_credit_note, get_invoice, list_invoices, list_credit_notes, get_document, type LocalCtx,
+  create_invoice, create_credit_note, get_invoice, get_credit_note, list_invoices, list_credit_notes, get_document, type LocalCtx,
 } from "../../src/live/local/tools/invoices.js";
 import { create_quote, update_quote, get_quote } from "../../src/live/local/tools/quotes.js";
 import { create_item, update_item, update_item_price } from "../../src/live/local/tools/items.js";
@@ -320,6 +320,47 @@ describe("finding 10: id vs number lookups", () => {
     await expect(get_invoice(db, { id: ia.id })).rejects.toThrow(/is ambiguous/);
     await expect(get_document(db, { kind: "invoice-pdf", id: ia.id })).rejects.toThrow(/is ambiguous/);
     expect((await get_invoice(db, { id: "R-A" })).id).toBe(ia.id);
+  });
+
+  it("get_credit_note resolves id first, then number (case-insensitive), and refuses an ambiguous string", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("rf-cn-number"));
+    const c = await seedAtCustomer(db);
+    const credit = (invoice_id: string, number: string) =>
+      create_credit_note(db, { invoice_id, number, document_date: TODAY, credit_total: 100, currency: "EUR", reason: "Storno" }, ctx);
+    const ia = await create_invoice(db, invoiceArgs(c.id, "F-2026-001"), ctx);
+    const ib = await create_invoice(db, invoiceArgs(c.id, "F-2026-002"), ctx);
+    const ic = await create_invoice(db, invoiceArgs(c.id, "F-2026-003"), ctx);
+    const ga = await credit(ia.id, "G-2026-006");
+
+    // The e2e repro: a credit note asked for by its number.
+    const byNumber = await get_credit_note(db, { id: "G-2026-006" });
+    expect(byNumber.id).toBe(ga.id);
+    expect(byNumber.lines).toEqual(ga.lines);
+    expect((await get_credit_note(db, { id: "g-2026-006" })).id).toBe(ga.id);
+    expect((await get_credit_note(db, { id: ga.id })).number).toBe("G-2026-006");
+    expect((await get_document(db, { kind: "credit-note-pdf", id: "g-2026-006" })).sha256).toBe(ga.archive_sha256);
+    await expect(get_credit_note(db, { id: "G-2026-999" })).rejects.toThrow(/Unknown credit note id: G-2026-999/);
+
+    // One credit note's id is another's number — refused, exactly as for invoices and quotes.
+    const gb = await credit(ib.id, ga.id);
+    await expect(get_credit_note(db, { id: ga.id })).rejects.toThrow(/is ambiguous — it is the id of credit note G-2026-006/);
+    await expect(get_document(db, { kind: "credit-note-pdf", id: ga.id })).rejects.toThrow(/is ambiguous/);
+    expect((await get_credit_note(db, { id: gb.id })).number).toBe(ga.id);
+
+    // ...also when the number differs from the id only in case.
+    const gc = await credit(ic.id, gb.id.toUpperCase());
+    await expect(get_credit_note(db, { id: gb.id })).rejects.toThrow(/is ambiguous/);
+    expect((await get_credit_note(db, { id: gc.id })).number).toBe(gb.id.toUpperCase());
+  });
+
+  it("invoice and quote numbers are matched case-insensitively, like the uniqueness rule", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("rf-number-case"));
+    const c = await seedAtCustomer(db);
+    const q = await create_quote(db, quoteArgs(c.id, "Q-2026-001"), ctx);
+    const i = await create_invoice(db, invoiceArgs(c.id, "F-2026-001"), ctx);
+    expect((await get_quote(db, { id: "q-2026-001" })).id).toBe(q.id);
+    expect((await get_invoice(db, { id: "f-2026-001" })).id).toBe(i.id);
+    expect((await get_document(db, { kind: "invoice-pdf", id: "f-2026-001" })).sha256).toBe(i.archive_sha256);
   });
 });
 
