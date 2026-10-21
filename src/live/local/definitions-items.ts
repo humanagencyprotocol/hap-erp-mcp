@@ -19,6 +19,14 @@ export const LINE_ITEM_ID_FIELD = {
     "stored next to the line so a different line price stays visible.",
 };
 
+/** Optional pin of the item revision a line was prepared for (used by definitions.ts' line schema). */
+export const LINE_ITEM_REVISION_FIELD = {
+  type: "number" as const,
+  description:
+    "Revision of the item this line was prepared for (optional, needs item_id; see the item's `revision`). " +
+    "If the item has changed since, the call is refused naming both revisions.",
+};
+
 const REVISION_FIELD = {
   type: "number" as const,
   description: "Revision of the item this change is for — refused if the item has changed since (see get_item).",
@@ -29,7 +37,7 @@ const KIND_FIELD = { type: "string" as const, enum: ["service", "product"], desc
 export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
   {
     name: "list_items",
-    description: "List/search catalogue items (item number, name, unit, list price, VAT rate). Active items only unless active is false.",
+    description: "List/search catalogue items (item number, name, unit, list price, VAT rate). Active items only unless active is false. Each item carries its `revision` — pass it as a line's item_revision to pin it.",
     inputSchema: {
       type: "object",
       properties: {
