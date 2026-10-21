@@ -9,6 +9,18 @@
  *
  * Reverse charge is refused outright without a customer UID (never silently
  * downgraded to `normal`) — see refuseIfInvalid below.
+ *
+ * Customers outside the EU VAT area (Andreas's decision on review finding 3,
+ * 2026-10-21, option A): any customer country other than the home country
+ * and the EU member states — Northern Ireland (XI), CH, GB, US, … — is
+ * REFUSED for invoices, quotes and quote → invoice conversion, with or
+ * without a VAT ID. With a VAT ID (business customer) 20 % home VAT is wrong
+ * (services: not taxable here; goods: export / intra-Community supply). Without
+ * one (consumer) the right treatment depends on what is supplied (e.g. § 3a
+ * Abs. 14 UStG catalogue services, export deliveries), which this connector
+ * cannot tell — so it is refused too, consistent with the existing rule that
+ * refuses an EU cross-border customer without UID rather than guessing.
+ * Credit notes are not affected: they follow the invoice they correct.
  */
 
 /** EU member states (2-letter ISO 3166-1 alpha-2), as of 2026. */
@@ -43,14 +55,27 @@ export function deriveTaxMode(input: TaxModeInput): TaxMode {
   return "normal";
 }
 
+/** True for a customer country that is neither the home country nor an EU member state (XI counts as outside). */
+export function isOutsideEuVatArea(homeCountryCode: string, customerCountryCode: string | null): boolean {
+  if (customerCountryCode === null) return false;
+  const c = customerCountryCode.toUpperCase();
+  return c !== homeCountryCode.toUpperCase() && !EU_COUNTRIES.has(c);
+}
+
 /**
- * Refuses the cases the law does not allow:
+ * Refuses the cases the law does not allow (or this connector does not support):
+ * - a customer outside the EU VAT area (see module docstring).
  * - EU cross-border B2B with no customer UID (reverse charge needs one;
  *   falling back to `normal` would be wrong, not safe).
  * - gross total above €10,000 with no customer UID, regardless of tax mode.
  */
 export function refuseIfInvalidTaxMode(input: TaxModeInput, grossTotal: number): void {
   const { homeCountryCode, customerCountryCode, customerUid } = input;
+  if (isOutsideEuVatArea(homeCountryCode, customerCountryCode)) {
+    throw new Error(
+      `Refused: Tax treatment for customers outside the EU is not supported yet (customer country ${customerCountryCode}) — nothing was issued.`
+    );
+  }
   const isEuCrossBorder =
     customerCountryCode !== null &&
     customerCountryCode !== homeCountryCode &&

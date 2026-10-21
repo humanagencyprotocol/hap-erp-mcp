@@ -36,6 +36,12 @@ async function main() {
     { capabilities: { tools: {} } }
   );
 
+  const activeTools: ReadonlyArray<{ name: string; outputSchema?: unknown }> = usingLocalAdapter ? LOCAL_TOOL_DEFINITIONS : TOOL_DEFINITIONS;
+  const STRUCTURED_TOOLS = new Set<string>([
+    ...activeTools.filter((t) => t.outputSchema !== undefined).map((t) => t.name),
+    "get_quote", "get_invoice", "get_credit_note", "get_document", "preview_invoice",
+  ]);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: usingLocalAdapter ? LOCAL_TOOL_DEFINITIONS : TOOL_DEFINITIONS };
   });
@@ -54,15 +60,14 @@ async function main() {
             text: JSON.stringify(result, null, 2),
           },
         ],
-        // get_quote, get_invoice, get_credit_note (their status/lifecycle
-        // fields are meant to be read generically, e.g. by a gateway
-        // rendering them without erp-specific code), get_document (simulation
-        // and live/local) and preview_invoice (live/local) (so the gateway can actually read
-        // the rendered/archived PDF — see live/local/definitions.ts) all
-        // declare an outputSchema; structuredContent carries the same object
-        // for clients that use it, the text content above still carries it
-        // for clients that don't.
-        ...(["get_quote", "get_invoice", "get_credit_note", "get_document", "preview_invoice"].includes(name)
+        // Every tool that declares an outputSchema in the active tool list
+        // answers with structuredContent too (data-driven — a hardcoded name
+        // list once left preview_quote declaring a schema it never answered,
+        // which MCP clients reject). The legacy names keep their
+        // structuredContent where they have no schema (live/local get_invoice,
+        // get_credit_note). The text content above still carries the same
+        // object for clients that don't read structuredContent.
+        ...(STRUCTURED_TOOLS.has(name) && result !== null && typeof result === "object" && !Array.isArray(result)
           ? { structuredContent: result as Record<string, unknown> }
           : {}),
       };

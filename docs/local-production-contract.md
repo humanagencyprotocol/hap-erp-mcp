@@ -59,8 +59,9 @@ These extend `docs/contract.md`; nothing there changes.
    row and on the revision snapshot.
 4. **Nothing on refusal.** A refused call writes nothing, consumes no number, calls no outside
    service after the refusal point, and says `Nothing was saved.` / `Nothing was issued.`
-5. **Order of side effects** stays render → write-once archive → one DB transaction (as
-   `create_invoice` today). An outside call (VIES) happens **before** the transaction and its
+5. **Order of side effects:** render → one DB transaction whose **last** step is the write-once
+   archive file; the file is deleted again if the transaction fails (§13 F1). Every Local write
+   holds one in-process lock. An outside call (VIES) happens **before** the transaction and its
    result is stored inside it.
 6. **No AI text where it would look like system data.** No input field carries a check result,
    a "verified" flag or a VIES answer. Free text the AI writes (`notes`, `memo`, `description`)
@@ -259,7 +260,7 @@ converted`; `cancelled` is not reachable in 0.10.0 (no cancel tool yet, as in th
 | `list_quotes` | read | sales · read; also invoicing (`readAlsoUnder`) | `status?`, `customer_id?`, `limit?` | — |
 | `get_quote` | read | as above | `id` (id or number), `revision?` | output has `customer` snapshot, `document` (sha256, filename) when sent, line fields as below |
 | `create_quote` | write | sales · `quote` | `customer_id`, `lines[]`, `discount_pct`, `value`, `currency`, `valid_until?`, `notes?`, `ticket_id` | lines are priced lines (below), not `{item_id, qty}` |
-| `update_quote` | write | sales · `quote` | `id`, `revision?`, `lines?`, `discount_pct`, `value`, `currency`, `valid_until?`, `notes?`, `ticket_id` | `revision` accepted (enforced when given) |
+| `update_quote` | write | sales · `quote` | `id`, `revision`, `lines?`, `discount_pct`, `value`, `currency`, `valid_until?`, `notes?`, `ticket_id` | `revision` required (§13 F5) |
 | `send_quote` | write | sales · `send` | `id`, `revision`, `value`, `discount_pct`, `currency`, `document_date`, `ticket_id` | adds `document_date` (must be today, company timezone); freezes + archives the PDF |
 | `preview_quote` | internal read | sales · internal | `id`, `revision`, `document_date` (any date) | new (Local only) |
 | `get_document` | internal read | invoicing · internal (exists) | `kind: "quote-pdf"`, `id` | new kind; sent quotes only |
@@ -379,7 +380,7 @@ Mechanism: the simulator's guarded pattern (`ADDED_COLUMNS` + `PRAGMA table_info
 `ALTER TABLE … ADD COLUMN`), plus `CREATE TABLE IF NOT EXISTS` for new tables. Additive only, no
 column is dropped or retyped, every step idempotent, all of it at `createLocalDb` start inside one
 transaction per step. A `local_schema_migrations(id TEXT PRIMARY KEY, applied_at TEXT)` table
-records the one data step (M-A2) so it runs exactly once. **`db.ts` has one owner: Part A** — B and
+records when the data step (M-A2) first ran; the step itself runs on every start (§13 F2). **`db.ts` has one owner: Part A** — B and
 C hand their DDL to A as the blocks below (already final here), A lands all of it in PR A1.
 
 | Id | Part | Change |
@@ -819,3 +820,20 @@ The contract picks a default for each so work can start; changing one is a contr
 | D5 | master-data 0.1 also declares `customer_payment` (bank/payment terms/credit limit) for future ERP connectors; ERP Local offers no tool for it. (Profile: `customer_payment_daily_max`, cumulative_count, and `credit_limit_max`, per_transaction of the declared field `credit_limit` without `requiredFor`.) |
 
 > **Note — planned, not a requirement of this contract:** when the first SAP / Microsoft Business Central connector comes, Invoicing gets a split between drafting and posting an invoice (a draft action vs. a post action), because those ERPs separate the two and only posting is final. That is a new Invoicing profile version at that time; ERP Local and Invoicing 0.1 are unchanged now.
+
+## 13. Fixes from the independent review (2026-10-21) — binding
+
+| # | Change |
+|---|--------|
+| F1 | One in-process lock serialises every Local tool call (writes; reads queue too, so none sees uncommitted rows); CLI writers take it as well. Transactions are `BEGIN IMMEDIATE` with `busy_timeout`. The archive PDF is written as the last step inside the transaction and deleted if it fails: no burned number, no orphan PDF, no `-r<N>` file blocking the next quote revision. |
+| F2 | M-A2 (snapshot backfill) runs on every start, and before each tool call when a row lacks a snapshot — documents an older erp-mcp writes into a migrated DB get a `migrated` snapshot. |
+| F3 | **Andreas's decision (option A):** an invoice, quote or quote → invoice conversion to a customer outside the EU VAT area (any country other than the home country and the EU member states — incl. XI, CH, GB) is refused before anything is numbered: "Tax treatment for customers outside the EU is not supported yet — nothing was issued." Consumers there (no VAT ID) are refused too: the right treatment depends on what is supplied, consistent with the refusal of EU cross-border customers without a VAT ID. Credit notes on existing invoices stay allowed (they follow the invoice's snapshot). |
+| F4 | An invoice or credit-note number is refused when any invoice, credit note **or quote** already uses it, case-insensitively (R7 / D2 both ways). |
+| F5 | `update_quote` requires `revision`. |
+| F6 | Quote → invoice without `lines` copies the quote revision's stored lines incl. `list_price` / `item_revision`; the catalogue is not read again (an inactive or repriced item does not block or change the conversion). |
+| F7 | Resubmitting identical tax data for a VIES-country VAT ID re-runs VIES whatever was stored (also `valid`) and stores the new result. |
+| F8 | `crm_contact_id` is stored trimmed and compared trimmed + case-folded. Customers sharing a VAT ID in any spelling are logged at start; `erp-mcp customers clear-uid <id>` removes one customer's VAT ID (next revision, no document touched) to resolve it. |
+| F9 | D1 is checked on the same customer row the invoice snapshot came from. |
+| F11 | Structured results (gateway PR #149): every tool that declares an `outputSchema` answers with `structuredContent` (data-driven in `index.ts`). New schemas: `get_customer` and the customer writes, `check_vat_id`, `preview_customer_change`, `get_item` and the item writes; `preview_quote`'s existing schema is now actually answered. |
+| F12 | New card-only read `check_customer_duplicates {uid?, crm_contact_id?, id?}` → `{uid, crm_contact_id, vat_duplicate_of, crm_contact_duplicate_of}` (normalised values; the holding customer's id or null), same comparison as the writes (F8). |
+| F10 | id-or-number lookups: id first; a string that is one document's id and another's number is refused as ambiguous. Document numbers refuse Windows device names (CON, PRN, AUX, NUL, COM1–9, LPT1–9, any case, with or without extension); archive directories use `path.dirname`. |

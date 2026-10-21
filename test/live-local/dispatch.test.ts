@@ -129,7 +129,7 @@ describe("live mode, adapter=local — tool availability", () => {
   it("LOCAL_TOOL_NAMES matches exactly what the dispatcher accepts", () => {
     expect(LOCAL_TOOL_NAMES).toEqual([
       "find_customers", "get_customer", "create_customer", "update_customer", "update_customer_tax_data",
-      "check_vat_id", "preview_customer_change", "create_invoice", "preview_invoice", "create_credit_note",
+      "check_vat_id", "preview_customer_change", "check_customer_duplicates", "create_invoice", "preview_invoice", "create_credit_note",
       "get_invoice", "list_invoices", "get_credit_note", "list_credit_notes", "get_document",
       ...QUOTE_TOOL_DEFINITIONS.map((d) => d.name),
       "list_items", "get_item", "create_item", "update_item", "update_item_price",

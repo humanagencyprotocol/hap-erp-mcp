@@ -22,8 +22,11 @@
  * update_quote is the next revision with its own archived PDF
  * (`<number>-r<revision>.pdf`). A converted quote never changes.
  *
- * Order of side effects as invoices: refusals → render → write-once archive →
- * one DB transaction. A refused call writes nothing and reserves no number.
+ * Order of side effects as invoices: refusals → render → one DB transaction
+ * whose last step is the write-once archive file (deleted again if the
+ * transaction fails). A refused call writes nothing and reserves no number;
+ * a failed update_quote leaves no `-r<N>` file behind that would block the
+ * next revision. Every write holds the Local lock (write-lock.ts).
  */
 import { v4 as uuidv4 } from "uuid";
 import { basename } from "path";
@@ -33,7 +36,8 @@ import { canonicalSha256 } from "../../../package-hash.js";
 import type { InvoiceTemplate } from "../template.js";
 import { requireDocumentSupported, resolveQuoteTemplate } from "../template.js";
 import { renderInvoiceDocument } from "../pdf-render.js";
-import { quoteArchivePath, writeOnce, readAndVerify, sha256 as sha256Buffer } from "../archive.js";
+import { quoteArchivePath, writeOnce, removeArchived, readAndVerify, sha256 as sha256Buffer } from "../archive.js";
+import { inTransaction, locked } from "../write-lock.js";
 import { buildViewModel } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
@@ -44,6 +48,7 @@ import {
   snapshotFromCustomer,
   representativeVatRate,
   refuseIfVatContradictsTaxMode,
+  requireByIdOrNumber,
   type CustomerSnapshot,
   type LocalCtx,
 } from "./invoices.js";
@@ -313,24 +318,16 @@ async function writeRevision(db: Db, quoteId: string, prepared: PreparedQuote, t
   );
 }
 
-async function inTransaction(db: Db, fn: () => Promise<void>): Promise<void> {
-  await db.run("BEGIN");
-  try {
-    await fn();
-    await db.run("COMMIT");
-  } catch (err) {
-    await db.run("ROLLBACK").catch(() => {});
-    throw err;
-  }
-}
-
 // --- Reads ---
 
 export async function requireLocalQuote(db: Db, idOrNumber: unknown): Promise<LocalQuoteRow> {
   if (typeof idOrNumber !== "string" || !idOrNumber) throw new Error("id is required (quote id or number)");
-  const row = await db.get<LocalQuoteRow>("SELECT * FROM local_quotes WHERE id = ? OR number = ?", [idOrNumber, idOrNumber]);
-  if (!row) throw new Error(`Unknown quote: ${idOrNumber}`);
-  return row;
+  try {
+    return await requireByIdOrNumber<LocalQuoteRow>(db, "local_quotes", idOrNumber, "quote");
+  } catch (err) {
+    if ((err as Error).message.startsWith("Unknown")) throw new Error(`Unknown quote: ${idOrNumber}`);
+    throw err;
+  }
 }
 
 export async function requireQuoteRevisionRow(db: Db, quote: LocalQuoteRow, revision: number): Promise<LocalQuoteRevisionRow> {
@@ -424,7 +421,7 @@ export async function list_quotes(db: Db, args: Record<string, any>) {
 
 // --- Writes ---
 
-export async function create_quote(db: Db, args: Record<string, any>, ctx: QuoteCtx) {
+export const create_quote = locked(async function create_quote(db: Db, args: Record<string, any>, ctx: QuoteCtx) {
   const template = quoteTemplateOf(ctx);
   requireDocumentSupported(template, "quote");
   const prepared = await prepareQuote(db, args, ctx, null);
@@ -432,15 +429,15 @@ export async function create_quote(db: Db, args: Record<string, any>, ctx: Quote
   await requireQuoteNumberUnused(db, prepared.number);
 
   const buffer = await renderQuote(prepared, ctx, template);
-  const archived = writeOnce(
-    quoteArchivePath(ctx.dataDir, documentYear(prepared.documentDate), prepared.number, prepared.revision),
-    buffer
-  );
+  const path = quoteArchivePath(ctx.dataDir, documentYear(prepared.documentDate), prepared.number, prepared.revision);
+  const archived = { path, sha256: sha256Buffer(buffer) };
 
   const id = uuidv4();
   const now = new Date().toISOString();
   const year = documentYear(prepared.documentDate);
+  let written: string | null = null;
   await inTransaction(db, async () => {
+    await requireQuoteNumberUnused(db, prepared.number);
     // The connector's own ordinal within the year — bookkeeping for the
     // series table, never the number (which comes with the request, D2).
     const seq = ((await db.get<{ m: number | null }>("SELECT MAX(seq) AS m FROM local_quote_numbers WHERE year = ?", [year]))?.m ?? 0) + 1;
@@ -456,10 +453,12 @@ export async function create_quote(db: Db, args: Record<string, any>, ctx: Quote
       ]
     );
     await writeRevision(db, id, prepared, args.ticket_id ?? null, now);
-  });
+    writeOnce(path, buffer);
+    written = path;
+  }, () => { if (written) removeArchived(written); });
 
   return quoteView(db, await requireLocalQuote(db, id));
-}
+});
 
 function refuseIfConverted(quote: LocalQuoteRow, invoiceNumber: string | null, nothing: string): void {
   if (quote.status === "converted") {
@@ -474,23 +473,30 @@ async function invoiceNumberOf(db: Db, invoiceId: string | null): Promise<string
   return (await db.get<{ number: string }>("SELECT number FROM local_invoices WHERE id = ?", [invoiceId]))?.number ?? null;
 }
 
-export async function update_quote(db: Db, args: Record<string, any>, ctx: QuoteCtx) {
+export const update_quote = locked(async function update_quote(db: Db, args: Record<string, any>, ctx: QuoteCtx) {
   const template = quoteTemplateOf(ctx);
   requireDocumentSupported(template, "quote");
+  // `revision` is required (review finding 5): omitted fields are kept from the
+  // current revision, so an update must name the revision its approver saw —
+  // otherwise it would silently build on another approval's change.
+  if (!Number.isInteger(args.revision) || args.revision < 1) {
+    throw new Error(
+      "Refused: revision is required — the quote's current revision this change is for (get_quote returns it). Nothing was saved."
+    );
+  }
   const quote = await requireLocalQuote(db, args.id);
   refuseIfConverted(quote, await invoiceNumberOf(db, quote.invoice_id), "Nothing was saved.");
-  if (args.revision !== undefined && args.revision !== null) requireQuoteAtRevision(quote, args.revision);
+  requireQuoteAtRevision(quote, args.revision);
 
   const prepared = await prepareQuote(db, args, ctx, quote);
   requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
 
   const buffer = await renderQuote(prepared, ctx, template);
-  const archived = writeOnce(
-    quoteArchivePath(ctx.dataDir, documentYear(prepared.documentDate), prepared.number, prepared.revision),
-    buffer
-  );
+  const path = quoteArchivePath(ctx.dataDir, documentYear(prepared.documentDate), prepared.number, prepared.revision);
+  const archived = { path, sha256: sha256Buffer(buffer) };
 
   const now = new Date().toISOString();
+  let written: string | null = null;
   await inTransaction(db, async () => {
     await db.run(
       `UPDATE local_quotes SET net_total = ?, valid_until = ?, notes = ?, revision = ?, updated_at = ?, document_date = ?,
@@ -505,10 +511,12 @@ export async function update_quote(db: Db, args: Record<string, any>, ctx: Quote
     const after = await db.get<{ revision: number }>("SELECT revision FROM local_quotes WHERE id = ?", [quote.id]);
     if (after?.revision !== prepared.revision) throw new Error(`Refused: quote ${quote.number} changed during this call. Nothing was saved.`);
     await writeRevision(db, quote.id, prepared, args.ticket_id ?? null, now);
-  });
+    writeOnce(path, buffer);
+    written = path;
+  }, () => { if (written) removeArchived(written); });
 
   return quoteView(db, await requireLocalQuote(db, quote.id));
-}
+});
 
 /**
  * Renders the quote PDF exactly as create_quote (no `id`) or update_quote

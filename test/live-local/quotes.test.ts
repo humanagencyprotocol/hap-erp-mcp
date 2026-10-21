@@ -111,11 +111,15 @@ describe("create_quote — D2: the number comes with the request, own series", (
     const before = await db.all("SELECT * FROM local_numbers");
     await create_quote(db, quoteArgs(cust, { number: "A-2026-0002" }), ctx);
     expect(await db.all("SELECT * FROM local_numbers")).toEqual(before);
-    // The next invoice may take a number nothing in the invoice series has used — even one a quote has.
-    await create_invoice(db, {
-      customer_id: cust, number: "A-2026-0002", ...INVOICE_ARGS_BASE,
-      lines: [{ description: "x", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100,
-    }, ctx);
+    // …and the series never collide the other way either (review finding 4): an
+    // invoice may not take a quote's number, in any case.
+    for (const number of ["A-2026-0002", "a-2026-0002"]) {
+      await expect(create_invoice(db, {
+        customer_id: cust, number, ...INVOICE_ARGS_BASE,
+        lines: [{ description: "x", qty: 1, unit_price: 100, vat_rate: 20 }], net_total: 100,
+      }, ctx)).rejects.toThrow(/already the number of a quote \(A-2026-0002\) — invoices and credit notes have their own series/);
+    }
+    expect(await db.all("SELECT * FROM local_numbers")).toEqual(before);
   });
 
   it("document_date as invoices: not today → refused, nothing saved", async () => {
@@ -176,9 +180,19 @@ describe("update_quote — revision rule, own PDF per revision", () => {
   it("keeps the lines when omitted; any successful update is a new revision", async () => {
     const cust = await world("q-update-keep");
     const q1 = await create_quote(db, quoteArgs(cust), ctx);
-    const q2 = await update_quote(db, { id: q1.id, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR", notes: "n" }, ctx);
+    const q2 = await update_quote(db, { id: q1.id, revision: 1, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR", notes: "n" }, ctx);
     expect(q2).toMatchObject({ revision: 2, notes: "n" });
     expect(q2.lines).toEqual(q1.lines);
+  });
+
+  it("finding 5: revision is required — an update that names none is refused, nothing written", async () => {
+    const cust = await world("q-norev");
+    const q1 = await create_quote(db, quoteArgs(cust), ctx);
+    await expect(
+      update_quote(db, { id: q1.id, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR", notes: "n" }, ctx)
+    ).rejects.toThrow(/revision is required/);
+    expect(archivedQuoteFiles()).toEqual(["SUV-A-2026-001-r1.pdf"]);
+    expect(await count("local_quote_revisions")).toBe(1);
   });
 
   it("stale revision is refused naming both; nothing changes", async () => {
@@ -195,8 +209,8 @@ describe("update_quote — revision rule, own PDF per revision", () => {
   it("refuses document_date ≠ today and a value mismatch, writing nothing", async () => {
     const cust = await world("q-update-refuse");
     const q1 = await create_quote(db, quoteArgs(cust), ctx);
-    await expect(update_quote(db, { id: q1.id, document_date: "2020-01-01", value: 2100, discount_pct: 0, currency: "EUR" }, ctx)).rejects.toThrow(/today/);
-    await expect(update_quote(db, { id: q1.id, document_date: TODAY, value: 1, discount_pct: 0, currency: "EUR" }, ctx)).rejects.toThrow(/value mismatch/);
+    await expect(update_quote(db, { id: q1.id, revision: 1, document_date: "2020-01-01", value: 2100, discount_pct: 0, currency: "EUR" }, ctx)).rejects.toThrow(/today/);
+    await expect(update_quote(db, { id: q1.id, revision: 1, document_date: TODAY, value: 1, discount_pct: 0, currency: "EUR" }, ctx)).rejects.toThrow(/value mismatch/);
     expect(archivedQuoteFiles()).toEqual(["SUV-A-2026-001-r1.pdf"]);
     expect(await count("local_quote_revisions")).toBe(1);
   });
@@ -205,7 +219,7 @@ describe("update_quote — revision rule, own PDF per revision", () => {
     const cust = await world("q-update-customer");
     const q1 = await create_quote(db, quoteArgs(cust), ctx);
     await changeCustomerTaxData(db, cust, { name: "Drautal AG", address_lines: ["Neu 1", "9500 Villach"], country: "AT", uid: "ATU87654321" });
-    const q2 = await update_quote(db, { id: q1.id, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR" }, ctx);
+    const q2 = await update_quote(db, { id: q1.id, revision: 1, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR" }, ctx);
     expect(q2.customer).toMatchObject({ name: "Drautal AG", uid: "ATU87654321", revision: 2 });
     expect((await get_quote(db, { id: q1.id, revision: 1 })).customer).toMatchObject({ name: "Drautal Maschinenbau GmbH", revision: 1 });
   });
@@ -215,7 +229,7 @@ describe("update_quote — revision rule, own PDF per revision", () => {
     const q = await create_quote(db, quoteArgs(cust), ctx);
     await create_invoice(db, { customer_id: cust, quote_id: q.id, quote_revision: 1, number: "2026-0500", ...INVOICE_ARGS_BASE, net_total: 2100 }, ctx);
     await expect(
-      update_quote(db, { id: q.id, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR" }, ctx)
+      update_quote(db, { id: q.id, revision: 1, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR" }, ctx)
     ).rejects.toThrow(/was converted to invoice 2026-0500 — a converted quote never changes/);
   });
 });

@@ -32,6 +32,31 @@ const REVISION_FIELD = {
   description: "Revision of the item this change is for — refused if the item has changed since (see get_item).",
 };
 
+const NULLABLE_STRING = { type: ["string", "null"] };
+
+/** What get_item / create_item / update_item / update_item_price return (structuredContent). */
+export const ITEM_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Catalogue item",
+  properties: {
+    id: { type: "string", title: "Item ID" },
+    sku: { ...NULLABLE_STRING, title: "Item number" },
+    name: { type: "string", title: "Name" },
+    description: { ...NULLABLE_STRING, title: "Description" },
+    kind: { type: "string", enum: ["service", "product"], title: "Kind" },
+    unit: { type: "string", title: "Unit" },
+    list_price: { type: "number", title: "List price" },
+    currency: { type: "string", title: "Currency" },
+    vat_rate: { type: "number", title: "VAT rate (%)" },
+    active: { type: "boolean", title: "Active" },
+    revision: { type: "number", title: "Revision" },
+    stock: { type: "null", title: "Stock (not tracked)" },
+    created_at: { ...NULLABLE_STRING, title: "Created" },
+    updated_at: { ...NULLABLE_STRING, title: "Updated" },
+  },
+  required: ["id", "name", "kind", "unit", "list_price", "currency", "vat_rate", "active", "revision"],
+};
+
 const KIND_FIELD = { type: "string" as const, enum: ["service", "product"], description: "service or product" };
 
 export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
@@ -61,6 +86,7 @@ export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
       },
       required: ["id"],
     },
+    outputSchema: ITEM_OUTPUT_SCHEMA,
   },
   {
     name: "create_item",
@@ -80,6 +106,7 @@ export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
       },
       required: ["name", "kind", "unit", "list_price", "vat_rate"],
     },
+    outputSchema: ITEM_OUTPUT_SCHEMA,
   },
   {
     name: "update_item",
@@ -102,6 +129,7 @@ export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
       },
       required: ["id", "revision"],
     },
+    outputSchema: ITEM_OUTPUT_SCHEMA,
   },
   {
     name: "update_item_price",
@@ -119,5 +147,6 @@ export const ITEM_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
       },
       required: ["id", "revision", "list_price", "vat_rate"],
     },
+    outputSchema: ITEM_OUTPUT_SCHEMA,
   },
 ];

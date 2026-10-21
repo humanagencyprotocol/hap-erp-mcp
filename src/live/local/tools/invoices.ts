@@ -7,11 +7,12 @@
  * never used before, across invoices AND credit notes (one shared
  * namespace, see db.ts).
  *
- * Order of operations in create_invoice/create_credit_note matters: render
- * → archive write (write-once) → database transaction, in that order. If
- * the archive write fails, the function throws before any row exists and
- * before the number is reserved — "nothing is issued" is a consequence of
- * this ordering, not a separate check.
+ * Order of operations in create_invoice/create_credit_note matters (review
+ * 2026-10-21, finding 1): refusals → render → ONE database transaction whose
+ * last step is the write-once archive file. If the archive write fails, the
+ * transaction rolls back — no row, no number reserved; if the transaction
+ * fails after the write, the file is deleted again. Every write holds the
+ * Local lock (write-lock.ts), so two writes never interleave.
  *
  * `document_date` (Andreas, 2026-10-18) comes WITH the request on
  * create_invoice/preview_invoice/create_credit_note alike — one consistent
@@ -37,11 +38,12 @@ import type { LiveCompany } from "../company-file.js";
 import type { InvoiceTemplate } from "../template.js";
 import { requireDocumentSupported } from "../template.js";
 import { renderInvoiceDocument } from "../pdf-render.js";
-import { archivePath, writeOnce, readAndVerify, sha256 as sha256Buffer } from "../archive.js";
+import { archivePath, writeOnce, removeArchived, readAndVerify, sha256 as sha256Buffer } from "../archive.js";
 import { buildViewModel, type LineForTemplate } from "../view-model.js";
 import { deriveTaxMode, refuseIfInvalidTaxMode, type TaxMode } from "../tax.js";
 import { validateDocumentDate, documentDateToUTCDate, requireDocumentDateIsToday } from "../date.js";
 import { requireLocalCustomer, requireViesValidForReverseCharge, type LocalCustomer } from "./customers.js";
+import { inTransaction, locked } from "../write-lock.js";
 import { requireSafeDocumentNumber } from "../document-number.js";
 import { resolveLocalLines, type LocalLine } from "../lines.js";
 import {
@@ -222,9 +224,44 @@ export function refuseIfVatContradictsTaxMode(lines: Array<{ vat_rate: number }>
   );
 }
 
+/**
+ * One namespace for invoices and credit notes, never shared with quotes (R7,
+ * D2), compared case-insensitively — the archive file names collide on
+ * case-insensitive file systems (macOS, Windows), so `r-1` after `R-1` must be
+ * refused everywhere, not only where the file write happens to fail.
+ */
 async function requireNumberUnused(db: Db, number: string): Promise<void> {
-  const row = await db.get<{ n: number }>("SELECT COUNT(*) as n FROM local_numbers WHERE number = ?", [number]);
-  if ((row?.n ?? 0) > 0) throw new Error(`Refused: number ${JSON.stringify(number)} has already been used (invoice or credit note). Nothing was issued.`);
+  const doc = await db.get<{ number: string }>("SELECT number FROM local_numbers WHERE lower(number) = lower(?)", [number]);
+  if (doc) {
+    throw new Error(`Refused: number ${JSON.stringify(number)} has already been used (invoice or credit note ${doc.number}). Nothing was issued.`);
+  }
+  const quote = await db.get<{ number: string }>("SELECT number FROM local_quote_numbers WHERE lower(number) = lower(?)", [number]);
+  if (quote) {
+    throw new Error(
+      `Refused: ${JSON.stringify(number)} is already the number of a quote (${quote.number}) — invoices and credit notes have their own series. Nothing was issued.`
+    );
+  }
+}
+
+/**
+ * id first; a number only when no document has that id. An id that is also
+ * another document's number is ambiguous and refused (review finding 10) —
+ * the document number pattern allows a UUID-shaped number.
+ */
+export async function requireByIdOrNumber<T extends { id: string; number: string }>(
+  db: Db, table: "local_invoices" | "local_credit_notes" | "local_quotes", idOrNumber: string, what: string
+): Promise<T> {
+  const rows = await db.all<T>(`SELECT * FROM ${table} WHERE id = ? OR number = ?`, [idOrNumber, idOrNumber]);
+  if (rows.length === 0) throw new Error(`Unknown ${what} id: ${idOrNumber}`);
+  if (rows.length > 1) {
+    const byId = rows.find((r) => r.id === idOrNumber)!;
+    const byNumber = rows.find((r) => r.id !== idOrNumber)!;
+    throw new Error(
+      `Refused: ${JSON.stringify(idOrNumber)} is ambiguous — it is the id of ${what} ${byId.number} and the number of ` +
+        `another ${what} (id ${byNumber.id}). Ask for ${byId.number} by its number, or the other one by its id.`
+    );
+  }
+  return rows[0];
 }
 
 export function representativeVatRate(lines: PricedInvoiceLine[], netTotal: number, vatTotal: number): number {
@@ -259,6 +296,8 @@ function lineForTemplate(l: PricedInvoiceLine, unit: string): LineForTemplate {
 interface PreparedInvoice {
   /** Read in the same call that derives the tax mode; the only customer data rendered or stored. */
   customer: CustomerSnapshot;
+  /** The row `customer` was taken from — D1 checks its VIES status, never a second read (finding 9). */
+  customerRow: LocalCustomer;
   customerId: string;
   number: string;
   documentDate: string;
@@ -285,7 +324,14 @@ function requireCustomerRevision(customer: CustomerRowWithRevision, declared: un
   }
 }
 
-async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx): Promise<PreparedInvoice> {
+/**
+ * `resolvedLines`: a quote conversion that keeps the quote's lines passes them
+ * as stored on the quote revision (incl. list_price / item_revision) — the
+ * catalogue is not read again (finding 6).
+ */
+async function prepareInvoice(
+  db: Db, args: Record<string, any>, ctx: LocalCtx, resolvedLines?: LocalLine[]
+): Promise<PreparedInvoice> {
   const { customer_id, net_total, currency, lines } = args;
 
   const customerRow: CustomerRowWithRevision = await requireLocalCustomer(db, customer_id);
@@ -296,7 +342,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
   // the "must be today" refusal is create_invoice's own, below (see date.ts).
   const documentDate = validateDocumentDate(args.document_date);
   const servicePeriod = validateServicePeriod(args.service_period);
-  const linesWithUnit = await resolveLocalLines(db, lines);
+  const linesWithUnit = resolvedLines ?? (await resolveLocalLines(db, lines));
   const totals = computeLineTotals(linesWithUnit);
 
   if (currency !== HOME_CURRENCY) refuse("currency", currency, HOME_CURRENCY, "Local live invoicing issues in EUR only.");
@@ -331,7 +377,7 @@ async function prepareInvoice(db: Db, args: Record<string, any>, ctx: LocalCtx):
           return args.payment_term_days as number;
         })();
 
-  return { customer, customerId: customerRow.id, number, documentDate, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
+  return { customer, customerRow, customerId: customerRow.id, number, documentDate, servicePeriod, linesWithUnit, totals, taxMode, paymentTermDays };
 }
 
 function invoiceVars(ctx: LocalCtx, prepared: PreparedInvoice, issuedAt: Date, dueDate: Date) {
@@ -361,18 +407,14 @@ async function invoiceWithLines(db: Db, idOrNumber: string) {
 }
 
 export async function requireLocalInvoiceRow(db: Db, idOrNumber: string): Promise<LocalInvoiceRow> {
-  const byId = await db.get<LocalInvoiceRow>("SELECT * FROM local_invoices WHERE id = ?", [idOrNumber]);
-  if (byId) return byId;
-  const byNumber = await db.get<LocalInvoiceRow>("SELECT * FROM local_invoices WHERE number = ?", [idOrNumber]);
-  if (byNumber) return byNumber;
-  throw new Error(`Unknown invoice id: ${idOrNumber}`);
+  return requireByIdOrNumber<LocalInvoiceRow>(db, "local_invoices", idOrNumber, "invoice");
 }
 
-export async function create_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
+export const create_invoice = locked(async function create_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "invoice");
   const conversion = await prepareQuoteConversion(db, args);
   args = conversion?.args ?? args;
-  const prepared = await prepareInvoice(db, args, ctx);
+  const prepared = await prepareInvoice(db, args, ctx, conversion?.storedLines);
   // Issuing — unlike preview_invoice — refuses a document_date that is not
   // today in the company's own calendar (see date.ts): the printed date is
   // the date on the request, never "now", and it must be today or the
@@ -380,7 +422,8 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
   requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
   await requireNumberUnused(db, prepared.number);
   // D1 (Andreas, 2026-10-21): reverse charge only with a stored VIES `valid`.
-  if (prepared.taxMode === "reverse_charge") await requireViesValidForReverseCharge(db, prepared.customerId, "invoice");
+  // Checked on the same row the snapshot came from (finding 9).
+  if (prepared.taxMode === "reverse_charge") requireViesValidForReverseCharge(prepared.customerRow, "invoice");
 
   // Fixed, non-"now" issue instant — the document's own date at UTC midnight
   // — so re-rendering the same request (preview, then issue) is deterministic
@@ -392,13 +435,15 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
   const buffer = await renderInvoiceDocument(ctx.template, vars, issuedAt);
   const templateFingerprint = canonicalSha256(ctx.template);
 
-  // Write-once archive BEFORE any database row — see module docstring.
   const path = archivePath(ctx.dataDir, issuedAt.getFullYear(), prepared.number);
-  const archived = writeOnce(path, buffer);
+  const archived = { path, sha256: sha256Buffer(buffer) };
 
+  // One transaction; the write-once archive file is its LAST step, and is
+  // deleted again if the transaction still fails (write-lock.ts).
   const id = uuidv4();
-  await db.run("BEGIN");
-  try {
+  let written: string | null = null;
+  await inTransaction(db, async () => {
+    await requireNumberUnused(db, prepared.number);
     await db.run(`INSERT INTO local_numbers (number, kind, document_id, issued_at) VALUES (?, 'invoice', ?, ?)`, [
       prepared.number, id, issuedAt.toISOString(),
     ]);
@@ -422,20 +467,18 @@ export async function create_invoice(db: Db, args: Record<string, any>, ctx: Loc
       await insertLine(db, "local_invoice_lines", "invoice_id", id, prepared.totals.lines[i], prepared.linesWithUnit[i]);
     }
     if (conversion) await markQuoteConverted(db, conversion, id);
-    await db.run("COMMIT");
-  } catch (err) {
-    await db.run("ROLLBACK").catch(() => {});
-    throw err;
-  }
+    writeOnce(path, buffer);
+    written = path;
+  }, () => { if (written) removeArchived(written); });
 
   return invoiceWithLines(db, id);
-}
+});
 
 export async function preview_invoice(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "invoice");
   const conversion = await prepareQuoteConversion(db, args);
   args = conversion?.args ?? args;
-  const prepared = await prepareInvoice(db, args, ctx);
+  const prepared = await prepareInvoice(db, args, ctx, conversion?.storedLines);
   // Deliberately no requireNumberUnused — a preview does not consume the number.
   // Deliberately no requireDocumentDateIsToday — an approver may want to see
   // the PDF as it would print for any date; only create_invoice enforces it.
@@ -483,6 +526,13 @@ export async function list_invoices(db: Db, args: Record<string, any>) {
 interface QuoteConversion {
   /** The request with `lines` filled from the quote revision when omitted. */
   args: Record<string, any>;
+  /**
+   * Lines omitted: the quote revision's lines exactly as stored — list_price
+   * and item_revision as quoted, no catalogue lookup, so an item deactivated
+   * or repriced since neither blocks the conversion nor changes what is
+   * recorded (review finding 6). Undefined when the request brings lines.
+   */
+  storedLines?: LocalLine[];
   quoteId: string;
   quoteNumber: string;
   quoteRevision: number;
@@ -525,13 +575,23 @@ async function prepareQuoteConversion(db: Db, args: Record<string, any>): Promis
   }
 
   // Lines omitted → the quote revision's lines (partial invoicing passes its own).
-  const lines = args.lines !== undefined ? args.lines : storedLinesAsInput(JSON.parse(revision.lines) as StoredQuoteLine[]);
+  const stored = JSON.parse(revision.lines) as StoredQuoteLine[];
+  const keepQuoteLines = args.lines === undefined;
+  const lines = keepQuoteLines ? storedLinesAsInput(stored) : args.lines;
   return {
     args: { ...args, lines },
+    storedLines: keepQuoteLines ? stored.map(storedLineAsLocalLine) : undefined,
     quoteId: quote.id,
     quoteNumber: quote.number,
     quoteRevision: quote.revision,
     customerId: quote.customer_id,
+  };
+}
+
+function storedLineAsLocalLine(l: StoredQuoteLine): LocalLine {
+  return {
+    description: l.description, qty: l.qty, unit_price: l.unit_price, vat_rate: l.vat_rate, unit: l.unit,
+    item_id: l.item_id ?? null, list_price: l.list_price ?? null, item_revision: l.item_revision ?? null,
   };
 }
 
@@ -556,7 +616,7 @@ async function creditNoteWithLines(db: Db, id: string) {
   return { ...withCustomerSnapshot(row), lines };
 }
 
-export async function create_credit_note(db: Db, args: Record<string, any>, ctx: LocalCtx) {
+export const create_credit_note = locked(async function create_credit_note(db: Db, args: Record<string, any>, ctx: LocalCtx) {
   requireDocumentSupported(ctx.template, "credit_note");
   const { invoice_id, credit_total, currency, reason, lines } = args;
 
@@ -623,11 +683,13 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
   const buffer = await renderInvoiceDocument(ctx.template, vars, issuedAt);
   const templateFingerprint = canonicalSha256(ctx.template);
   const path = archivePath(ctx.dataDir, issuedAt.getFullYear(), number);
-  const archived = writeOnce(path, buffer);
+  const archived = { path, sha256: sha256Buffer(buffer) };
 
+  // As create_invoice: one transaction, the archive file its last step.
   const id = uuidv4();
-  await db.run("BEGIN");
-  try {
+  let written: string | null = null;
+  await inTransaction(db, async () => {
+    await requireNumberUnused(db, number);
     await db.run(`INSERT INTO local_numbers (number, kind, document_id, issued_at) VALUES (?, 'credit_note', ?, ?)`, [
       number, id, issuedAt.toISOString(),
     ]);
@@ -649,14 +711,12 @@ export async function create_credit_note(db: Db, args: Record<string, any>, ctx:
     }
     const newStatus = projectedCredited >= invoice.net_total - INVOICE_VALUE_TOLERANCE ? "credited" : "partially_credited";
     await db.run("UPDATE local_invoices SET credited_total = ?, status = ? WHERE id = ?", [projectedCredited, newStatus, invoice.id]);
-    await db.run("COMMIT");
-  } catch (err) {
-    await db.run("ROLLBACK").catch(() => {});
-    throw err;
-  }
+    writeOnce(path, buffer);
+    written = path;
+  }, () => { if (written) removeArchived(written); });
 
   return creditNoteWithLines(db, id);
-}
+});
 
 export async function get_credit_note(db: Db, args: Record<string, any>) {
   return creditNoteWithLines(db, args.id);
@@ -685,8 +745,7 @@ export async function get_document(db: Db, args: Record<string, any>) {
     archivePathStored = row.archive_path;
     archiveSha256 = row.archive_sha256;
   } else if (kind === "credit-note-pdf") {
-    const row = await db.get<LocalCreditNoteRow>("SELECT * FROM local_credit_notes WHERE id = ? OR number = ?", [id, id]);
-    if (!row) throw new Error(`Unknown credit note id: ${id}`);
+    const row = await requireByIdOrNumber<LocalCreditNoteRow>(db, "local_credit_notes", id, "credit note");
     archivePathStored = row.archive_path;
     archiveSha256 = row.archive_sha256;
   } else if (kind === "quote-pdf") {
