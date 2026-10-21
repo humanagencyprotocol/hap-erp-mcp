@@ -91,7 +91,7 @@ describe("conversion", () => {
 
   it("a stale quote_revision is refused naming both revisions; nothing issued", async () => {
     const { cust, quote } = await worldWithQuote("conv-stale");
-    await update_quote(db, { id: quote.id, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR", notes: "r2" }, ctx);
+    await update_quote(db, { id: quote.id, revision: 1, document_date: TODAY, value: 2100, discount_pct: 0, currency: "EUR", notes: "r2" }, ctx);
     await expect(create_invoice(db, convertArgs(cust, quote.id), ctx)).rejects.toThrow(
       "Quote SUV-A-2026-010 is at revision 2; this request is for revision 1."
     );

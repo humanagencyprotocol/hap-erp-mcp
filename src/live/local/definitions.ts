@@ -109,7 +109,8 @@ const PREVIEW_INVOICE_OUTPUT_SCHEMA = {
 
 // Customers (docs/local-production-contract.md §3). Writes are each their own
 // decision: contact data, tax data (name, address, country, VAT ID) and new
-// customers. check_vat_id / preview_customer_change are card-only reads.
+// customers. check_vat_id / preview_customer_change / check_customer_duplicates
+// are card-only reads.
 const CUSTOMER_ADDRESS_FIELD = {
   type: "array" as const,
   items: { type: "string" },
@@ -125,6 +126,82 @@ const VIES_NOTE =
   "service when saved — this sends the customer's country and VAT ID, and the company's own VAT ID, to ec.europa.eu. " +
   "A VAT ID VIES reports as not valid is refused; if VIES is unreachable the customer is saved with the VAT ID marked " +
   "not checked.";
+
+// Structured results (structuredContent) of the customer tools — so a governing
+// layer reads them generically, without parsing the text content.
+const NULLABLE_STRING = { type: ["string", "null"] };
+const VIES_RESULT_SCHEMA = {
+  type: "object",
+  title: "VIES result",
+  properties: {
+    status: { type: "string", title: "Status" },
+    reason: { ...NULLABLE_STRING, title: "Reason" },
+    checked_at: { ...NULLABLE_STRING, title: "Checked at" },
+    request_id: { ...NULLABLE_STRING, title: "VIES request id" },
+    name: { ...NULLABLE_STRING, title: "Name at VIES" },
+    address: { ...NULLABLE_STRING, title: "Address at VIES" },
+  },
+  required: ["status"],
+};
+const CUSTOMER_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Customer",
+  properties: {
+    id: { type: "string", title: "Customer ID" },
+    name: { type: "string", title: "Name" },
+    address_lines: { type: "array", items: { type: "string" }, title: "Address" },
+    country: { type: "string", title: "Country" },
+    uid: { ...NULLABLE_STRING, title: "VAT ID" },
+    email: { ...NULLABLE_STRING, title: "Email" },
+    crm_contact_id: { ...NULLABLE_STRING, title: "CRM contact" },
+    revision: { type: "number", title: "Revision" },
+    vies: { anyOf: [VIES_RESULT_SCHEMA, { type: "null" }], title: "Last VIES check" },
+    vies_status: { ...NULLABLE_STRING, title: "VIES status" },
+    tax_mode: { type: "string", title: "Tax mode" },
+    tax_mode_label: { type: "string", title: "Tax treatment" },
+    created_at: { ...NULLABLE_STRING, title: "Created" },
+    updated_at: { ...NULLABLE_STRING, title: "Updated" },
+  },
+  required: ["id", "name", "address_lines", "country", "revision"],
+};
+const VAT_CHECK_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "VAT ID check",
+  properties: {
+    uid: { type: "string", title: "VAT ID" },
+    format: { type: "string", title: "Format" },
+    vies: VIES_RESULT_SCHEMA,
+    duplicate: { type: "boolean", title: "Another customer has it" },
+    duplicate_of: { ...NULLABLE_STRING, title: "Customer with this VAT ID" },
+  },
+  required: ["uid", "format", "vies", "duplicate", "duplicate_of"],
+};
+const PREVIEW_CUSTOMER_CHANGE_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Customer change preview",
+  properties: {
+    current: { type: "object", title: "Current tax data" },
+    revision: { type: "number", title: "Revision" },
+    changed: { type: "array", items: { type: "string" }, title: "Changed fields" },
+    uid_or_country_changed: { type: "boolean", title: "VAT ID or country changed" },
+    tax_mode: { type: "object", title: "Tax treatment before / after" },
+    issued_documents: { type: "object", title: "Documents already issued" },
+    open_quotes: { type: "number", title: "Open quotes" },
+    vat_check: { anyOf: [VAT_CHECK_OUTPUT_SCHEMA, { type: "null" }], title: "VAT ID check" },
+  },
+  required: ["current", "revision", "changed", "uid_or_country_changed", "tax_mode", "issued_documents", "open_quotes", "vat_check"],
+};
+const CUSTOMER_DUPLICATES_OUTPUT_SCHEMA = {
+  type: "object",
+  title: "Duplicate check",
+  properties: {
+    uid: { ...NULLABLE_STRING, title: "VAT ID (normalised)" },
+    crm_contact_id: { ...NULLABLE_STRING, title: "CRM contact (normalised)" },
+    vat_duplicate_of: { ...NULLABLE_STRING, title: "Customer with this VAT ID" },
+    crm_contact_duplicate_of: { ...NULLABLE_STRING, title: "Customer with this CRM contact" },
+  },
+  required: ["uid", "crm_contact_id", "vat_duplicate_of", "crm_contact_duplicate_of"],
+};
 
 const CUSTOMER_TOOL_DEFINITIONS = [
   {
@@ -159,6 +236,7 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       },
       required: ["id"],
     },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
   },
   {
     name: "create_customer",
@@ -178,6 +256,7 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       },
       required: ["name", "address_lines", "country"],
     },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
   },
   {
     name: "update_customer",
@@ -195,6 +274,7 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       },
       required: ["id", "revision"],
     },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
   },
   {
     name: "update_customer_tax_data",
@@ -215,6 +295,7 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       },
       required: ["id", "revision", "name", "address_lines", "country", "uid"],
     },
+    outputSchema: CUSTOMER_OUTPUT_SCHEMA,
   },
   {
     name: "check_vat_id",
@@ -226,6 +307,7 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       properties: { country: COUNTRY_FIELD, uid: { type: "string", description: "VAT ID" } },
       required: ["country", "uid"],
     },
+    outputSchema: VAT_CHECK_OUTPUT_SCHEMA,
   },
   {
     name: "preview_customer_change",
@@ -244,6 +326,24 @@ const CUSTOMER_TOOL_DEFINITIONS = [
       },
       required: ["id", "name", "address_lines", "country"],
     },
+    outputSchema: PREVIEW_CUSTOMER_CHANGE_OUTPUT_SCHEMA,
+  },
+  {
+    name: "check_customer_duplicates",
+    description:
+      "Check, without saving anything, whether another customer already has this VAT ID and/or CRM contact — the " +
+      "same comparison create_customer / update_customer refuse on (VAT ID: spaces, dots, dashes and case ignored; " +
+      "CRM contact: surrounding spaces and case ignored). Returns the customer id holding each, or null.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uid: { type: "string", description: "VAT ID to check (optional)" },
+        crm_contact_id: { type: "string", description: "CRM contact id to check (optional)" },
+        id: { type: "string", description: "The customer being changed — not counted as its own duplicate (optional)" },
+      },
+      required: [],
+    },
+    outputSchema: CUSTOMER_DUPLICATES_OUTPUT_SCHEMA,
   },
 ] as const;
 

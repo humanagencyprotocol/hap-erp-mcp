@@ -27,6 +27,7 @@ import { checkVatIdFormat, isViesCountry, normaliseVatId, refuseIfBadVatIdFormat
 import {
   notApplicable, notChecked, viesClientFromEnv, PREVIEW_VIES_TIMEOUT_MS, type ViesClient, type ViesResult,
 } from "../vies.js";
+import { inTransaction, locked } from "../write-lock.js";
 
 /** LocalCtx plus the VIES client (dispatch passes one built from env; tests inject a stub). */
 export type CustomerCtx = LocalCtx & { vies?: ViesClient; now?: () => Date };
@@ -147,9 +148,9 @@ export async function find_customers(db: Db, args: Record<string, any>, ctx?: Lo
     const like = `%${query}%`;
     params.push(like, like);
   }
-  if (typeof args.crm_contact_id === "string" && args.crm_contact_id) {
-    conditions.push("crm_contact_id = ?");
-    params.push(args.crm_contact_id);
+  if (typeof args.crm_contact_id === "string" && args.crm_contact_id.trim()) {
+    conditions.push("crm_contact_id IS NOT NULL AND lower(trim(crm_contact_id)) = ?");
+    params.push(crmKey(args.crm_contact_id));
   }
   if (typeof args.uid === "string" && args.uid) conditions.push("uid IS NOT NULL");
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -226,7 +227,7 @@ function validateNewCustomer(raw: unknown, at: string): Required<Omit<NewLocalCu
     ...shape,
     uid: uid === null ? null : normaliseVatId(uid),
     email: optionalString(c, "email", at),
-    crm_contact_id: optionalString(c, "crm_contact_id", at),
+    crm_contact_id: optionalString(c, "crm_contact_id", at)?.trim() ?? null,
   };
 }
 
@@ -242,9 +243,18 @@ async function uidOwner(db: Db, uid: string, exceptId?: string): Promise<string 
   return hit ? hit.id : null;
 }
 
+/**
+ * A CRM contact id compared trimmed and case-folded (review finding 8):
+ * `"crm-1 "`, `"CRM-1"` and `"crm-1"` are one contact. Stored trimmed.
+ */
+export function crmKey(crm: string): string {
+  return crm.trim().toLowerCase();
+}
+
 async function crmOwner(db: Db, crm: string, exceptId?: string): Promise<string | null> {
   const row = await db.get<{ id: string }>(
-    `SELECT id FROM local_customers WHERE crm_contact_id = ? AND id != ?`, [crm, exceptId ?? ""]
+    `SELECT id FROM local_customers WHERE crm_contact_id IS NOT NULL AND lower(trim(crm_contact_id)) = ? AND id != ?`,
+    [crmKey(crm), exceptId ?? ""]
   );
   return row ? row.id : null;
 }
@@ -325,21 +335,9 @@ async function recheckInTransaction(
   await refuseDuplicates(db, uid, crm, id ?? undefined);
 }
 
-async function inTransaction<T>(db: Db, fn: () => Promise<T>): Promise<T> {
-  await db.run("BEGIN");
-  try {
-    const out = await fn();
-    await db.run("COMMIT");
-    return out;
-  } catch (err) {
-    await db.run("ROLLBACK").catch(() => {});
-    throw err;
-  }
-}
-
 // --- Writes ---
 
-export async function create_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
+export const create_customer = locked(async function create_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
   let c: ReturnType<typeof validateNewCustomer>;
   try {
     c = validateNewCustomer({ ...args, uid: undefined, id: undefined }, "customer");
@@ -368,11 +366,11 @@ export async function create_customer(db: Db, args: Record<string, any>, ctx: Cu
     }, ticketId, at);
   });
   return withTaxMode(toView(await requireLocalCustomer(db, id)), ctx);
-}
+});
 
 const TAX_FIELDS = ["name", "address_lines", "country", "uid"] as const;
 
-export async function update_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
+export const update_customer = locked(async function update_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
   if (TAX_FIELDS.some((f) => args[f] !== undefined)) {
     throw new Error("Refused: name/address/country/VAT ID are tax data — use update_customer_tax_data. Nothing was saved.");
   }
@@ -383,7 +381,7 @@ export async function update_customer(db: Db, args: Record<string, any>, ctx: Cu
   let crm: string | null;
   try {
     email = optionalString(args, "email", "customer");
-    crm = optionalString(args, "crm_contact_id", "customer");
+    crm = optionalString(args, "crm_contact_id", "customer")?.trim() ?? null;
   } catch (err) {
     throw refused(err);
   }
@@ -411,7 +409,7 @@ export async function update_customer(db: Db, args: Record<string, any>, ctx: Cu
     await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
   });
   return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
-}
+});
 
 function sameTaxData(row: LocalCustomer, t: TaxShape & { uid: string | null }): boolean {
   return (
@@ -422,7 +420,7 @@ function sameTaxData(row: LocalCustomer, t: TaxShape & { uid: string | null }): 
   );
 }
 
-export async function update_customer_tax_data(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
+export const update_customer_tax_data = locked(async function update_customer_tax_data(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
   const missing = TAX_FIELDS.filter((f) => args[f] === undefined);
   if (missing.length > 0) {
     throw refused(new Error(`${missing.join(", ")} required — tax data is replaced as a whole (uid: null removes the VAT ID)`));
@@ -439,12 +437,13 @@ export async function update_customer_tax_data(db: Db, args: Record<string, any>
   await refuseDuplicates(db, uid, null, row.id);
   refuseStaleRevision(row, revision);
 
-  // A revision must mean a change — with one exception: the same EU VAT ID
-  // whose last stored VIES result is not `valid` may be submitted unchanged,
-  // to re-run the check (the only way to confirm it, which a reverse-charge
-  // invoice needs — Andreas's decision D1).
+  // A revision must mean a change — with one exception: the same VIES VAT ID
+  // may be submitted unchanged to re-run the check, whatever was stored last
+  // (review finding 7): it is how a `not_checked` is confirmed (a reverse-
+  // charge invoice needs `valid` — Andreas's decision D1), and how an old
+  // `valid` is refreshed. The result of this run is what is stored.
   if (sameTaxData(row, { ...shape, uid })) {
-    const recheck = uid !== null && isViesCountry(shape.country) && row.vies_status !== "valid";
+    const recheck = uid !== null && isViesCountry(shape.country);
     if (!recheck) {
       throw new Error(`Refused: nothing would change — customer ${row.id} already has this tax data. Nothing was saved.`);
     }
@@ -466,7 +465,7 @@ export async function update_customer_tax_data(db: Db, args: Record<string, any>
     await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
   });
   return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
-}
+});
 
 // --- Card-only preview reads (§3.4) ---
 
@@ -495,6 +494,31 @@ export async function check_vat_id(db: Db, args: Record<string, any>, ctx: Custo
   if (typeof args.country !== "string" || !/^[A-Za-z]{2}$/.test(args.country)) throw new Error("country must be a 2-letter ISO code, e.g. AT");
   if (typeof args.uid !== "string" || !args.uid.trim()) throw new Error("uid is required");
   return vatCheck(db, ctx, args.country.toUpperCase(), args.uid);
+}
+
+/**
+ * Card read: which customer already holds this VAT ID / CRM contact — the
+ * same normalisation the writes refuse on (normaliseVatId; crmKey). Display
+ * only, never stored. `id` = the customer being changed (not its own duplicate).
+ */
+export async function check_customer_duplicates(db: Db, args: Record<string, any>) {
+  const str = (v: unknown, key: string): string | null => {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "string") throw new Error(`${key} must be a string`);
+    return v.trim() ? v : null;
+  };
+  const rawUid = str(args.uid, "uid");
+  const rawCrm = str(args.crm_contact_id, "crm_contact_id");
+  const exceptId = str(args.id, "id") ?? undefined;
+  if (rawUid === null && rawCrm === null) throw new Error("give at least one of uid, crm_contact_id");
+  const uid = rawUid === null ? null : normaliseVatId(rawUid);
+  const crm = rawCrm === null ? null : crmKey(rawCrm);
+  return {
+    uid,
+    crm_contact_id: crm,
+    vat_duplicate_of: uid === null ? null : await uidOwner(db, uid, exceptId),
+    crm_contact_duplicate_of: crm === null ? null : await crmOwner(db, crm, exceptId),
+  };
 }
 
 /** What update_customer_tax_data would change, for the card (R4: issued documents keep the old data). */
@@ -552,8 +576,10 @@ export async function preview_customer_change(db: Db, args: Record<string, any>,
  * correct an issued invoice and follow that invoice's snapshot tax treatment,
  * so an unconfirmed VAT ID never blocks a correction (coordinator, 2026-10-21).
  */
-export async function requireViesValidForReverseCharge(db: Db, customerId: string, what: string): Promise<void> {
-  const row = await requireLocalCustomer(db, customerId);
+export function requireViesValidForReverseCharge(row: LocalCustomer, what: string): void {
+  // `row` is the customer row the document's snapshot was taken from — never
+  // a second read, which could pair an old snapshot with a newer VIES result
+  // (review 2026-10-21, finding 9).
   if (row.vies_status === "valid") return;
   const state = row.vies_status === null ? "never checked" : row.vies_status.replace("_", " ");
   throw new Error(
@@ -576,7 +602,7 @@ async function insertCliCustomer(db: Db, id: string, c: ReturnType<typeof valida
   }, null, at);
 }
 
-export async function addCustomer(db: Db, raw: unknown): Promise<LocalCustomerView> {
+export const addCustomer = locked(async function addCustomer(db: Db, raw: unknown): Promise<LocalCustomerView> {
   const c = validateNewCustomer(raw, "customer");
   const id = c.id ?? randomUUID();
   const existing = await db.get<{ n: number }>("SELECT COUNT(*) as n FROM local_customers WHERE id = ?", [id]);
@@ -585,10 +611,10 @@ export async function addCustomer(db: Db, raw: unknown): Promise<LocalCustomerVi
   const at = new Date().toISOString();
   await inTransaction(db, () => insertCliCustomer(db, id, c, at));
   return toView(await requireLocalCustomer(db, id));
-}
+});
 
 /** All-or-nothing: validates every entry, and checks every id against existing rows, before inserting any. */
-export async function importCustomers(db: Db, rawList: unknown): Promise<LocalCustomerView[]> {
+export const importCustomers = locked(async function importCustomers(db: Db, rawList: unknown): Promise<LocalCustomerView[]> {
   if (!Array.isArray(rawList) || rawList.length === 0) throw new Error("customers import: input must be a non-empty JSON array");
   const parsed = rawList.map((raw, i) => validateNewCustomer(raw, `customers[${i}]`));
 
@@ -603,7 +629,10 @@ export async function importCustomers(db: Db, rawList: unknown): Promise<LocalCu
     if ((existing?.n ?? 0) > 0) throw new Error(`Refused: customer id ${id} already exists — nothing in this import was saved.`);
   }
   for (const key of ["uid", "crm_contact_id"] as const) {
-    const values = parsed.map((c) => c[key]).filter((v): v is string => v !== null);
+    const values = parsed
+      .map((c) => c[key])
+      .filter((v): v is string => v !== null)
+      .map((v) => (key === "uid" ? normaliseVatId(v) : crmKey(v)));
     const dup = values.find((v, i) => values.indexOf(v) !== i);
     if (dup) throw new Error(`customers import: ${key} ${dup} appears twice in the input — nothing was saved.`);
   }
@@ -623,7 +652,37 @@ export async function importCustomers(db: Db, rawList: unknown): Promise<LocalCu
   const out: LocalCustomerView[] = [];
   for (const id of ids) out.push(toView(await requireLocalCustomer(db, id)));
   return out;
-}
+});
+
+/**
+ * CLI `customers clear-uid <id>` (review finding 8): removes the VAT ID (and
+ * its stored VIES result) from one customer, as its next revision with a
+ * revision row — the way out when two customers hold the same VAT ID in
+ * different spellings (written by 0.9.5, logged at start), which locks both
+ * out of every tax-data change. Chosen over merge/deactivate as the minimal
+ * safe step: no issued document is touched (they keep their snapshots), no
+ * document is moved between customers, nothing new is needed in the schema.
+ * The person typing it is the decision, as for `customers add`. Refused when
+ * the customer has no VAT ID.
+ */
+export const clearCustomerUid = locked(async function clearCustomerUid(db: Db, id: string): Promise<LocalCustomerView> {
+  const row = await requireLocalCustomer(db, id);
+  if (row.uid === null) throw new Error(`Refused: customer ${row.id} has no VAT ID. Nothing was saved.`);
+  const at = new Date().toISOString();
+  const next: CustomerRevisionContent = { ...contentOf(row), uid: null };
+  await inTransaction(db, async () => {
+    const fresh = await requireLocalCustomer(db, id);
+    refuseStaleRevision(fresh, row.revision);
+    await db.run(
+      `UPDATE local_customers SET uid = NULL, revision = ?, updated_at = ?,
+         vies_status = NULL, vies_reason = NULL, vies_checked_at = NULL, vies_request_id = NULL, vies_name = NULL, vies_address = NULL
+       WHERE id = ?`,
+      [row.revision + 1, at, row.id]
+    );
+    await writeRevision(db, row.id, row.revision + 1, next, null, at);
+  });
+  return toView(await requireLocalCustomer(db, row.id));
+});
 
 export async function listCustomersForCli(db: Db): Promise<LocalCustomerView[]> {
   const rows = await db.all<LocalCustomer>("SELECT * FROM local_customers ORDER BY name");
@@ -639,4 +698,5 @@ export const CUSTOMER_TOOL_HANDLERS = {
   update_customer_tax_data: (db: Db, args: Record<string, any>, ctx: LocalCtx) => update_customer_tax_data(db, args, ctx),
   check_vat_id: (db: Db, args: Record<string, any>, ctx: LocalCtx) => check_vat_id(db, args, ctx),
   preview_customer_change: (db: Db, args: Record<string, any>, ctx: LocalCtx) => preview_customer_change(db, args, ctx),
+  check_customer_duplicates: (db: Db, args: Record<string, any>) => check_customer_duplicates(db, args),
 } as const;

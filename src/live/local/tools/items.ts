@@ -19,6 +19,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { Db } from "../../../db.js";
 import type { LocalToolHandler } from "../dispatch.js";
+import { inTransaction, locked } from "../write-lock.js";
 
 export const ITEM_KINDS = ["service", "product"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
@@ -164,18 +165,6 @@ async function writeRevision(db: Db, item: LocalItem, ticketId: unknown, at: str
   );
 }
 
-async function inTransaction<T>(db: Db, fn: () => Promise<T>): Promise<T> {
-  await db.run("BEGIN");
-  try {
-    const out = await fn();
-    await db.run("COMMIT");
-    return out;
-  } catch (err) {
-    await db.run("ROLLBACK").catch(() => {});
-    throw err;
-  }
-}
-
 /** Writes `next` as the item's next revision (row + revision snapshot), inside one transaction. */
 async function saveNextRevision(db: Db, current: LocalItemRow, next: ItemContent, ticketId: unknown): Promise<LocalItem> {
   const at = new Date().toISOString();
@@ -229,7 +218,7 @@ export async function get_item(db: Db, args: Record<string, any>): Promise<Local
   return { ...current, ...content, revision: args.revision, updated_at: rev.created_at };
 }
 
-export async function create_item(db: Db, args: Record<string, any>): Promise<LocalItem> {
+export const create_item = locked(async function create_item(db: Db, args: Record<string, any>): Promise<LocalItem> {
   const name = requireText(args.name, "name");
   const kind = requireKind(args.kind);
   const unit = requireText(args.unit, "unit");
@@ -251,11 +240,11 @@ export async function create_item(db: Db, args: Record<string, any>): Promise<Lo
     await writeRevision(db, toItem(await requireItemRow(db, id)), args.ticket_id, at);
   });
   return toItem(await requireItemRow(db, id));
-}
+});
 
 const UPDATE_ITEM_FIELDS = ["name", "sku", "unit", "kind", "description", "active"] as const;
 
-export async function update_item(db: Db, args: Record<string, any>): Promise<LocalItem> {
+export const update_item = locked(async function update_item(db: Db, args: Record<string, any>): Promise<LocalItem> {
   if (args.list_price !== undefined || args.vat_rate !== undefined) {
     throw new Error("Refused: price and VAT rate are their own decision — use update_item_price. Nothing was saved.");
   }
@@ -281,9 +270,9 @@ export async function update_item(db: Db, args: Record<string, any>): Promise<Lo
   }
   await refuseDuplicateSku(db, next.sku, row.id);
   return saveNextRevision(db, row, next, args.ticket_id);
-}
+});
 
-export async function update_item_price(db: Db, args: Record<string, any>): Promise<LocalItem> {
+export const update_item_price = locked(async function update_item_price(db: Db, args: Record<string, any>): Promise<LocalItem> {
   const row = await requireItemRow(db, args.id);
   if (args.list_price === undefined || args.vat_rate === undefined) {
     throw new Error("Refused: update_item_price needs both list_price and vat_rate. Nothing was saved.");
@@ -297,7 +286,7 @@ export async function update_item_price(db: Db, args: Record<string, any>): Prom
     );
   }
   return saveNextRevision(db, row, { ...contentOf(toItem(row)), list_price, vat_rate }, args.ticket_id);
-}
+});
 
 /** Handlers keyed by tool name, merged by dispatch.ts. */
 export const ITEM_TOOL_HANDLERS: Readonly<Record<string, LocalToolHandler>> = {

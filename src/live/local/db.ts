@@ -12,8 +12,10 @@
  */
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 import type { Db } from "../../db.js";
+import { normaliseVatId } from "./vat-id.js";
+import { inTransaction } from "./write-lock.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS local_customers (
@@ -300,8 +302,33 @@ export function migrateLocalSchema(db: RawDb, log: (msg: string) => void): void 
   })();
 
   ensureUidIndex(db, log);
-  snapshotIssuedDocumentsOnce(db);
+  snapshotIssuedDocuments(db);
   backfillCustomerRevisions(db);
+}
+
+/**
+ * Customers whose VAT IDs differ only in spelling (`atu 123.456-78` vs
+ * `ATU12345678`) are the same VAT ID to every connector check, but not to the
+ * raw unique index. Logged on every start (review 2026-10-21, finding 8): each
+ * such customer is refused any tax-data change ("customer … already has VAT
+ * ID …") until one of them loses the VAT ID — `erp-mcp customers clear-uid
+ * <id>` (cli.ts), or update_customer_tax_data with uid null.
+ */
+function logUidSpellingVariants(db: RawDb, log: (msg: string) => void): void {
+  const rows = db.prepare(`SELECT id, uid FROM local_customers WHERE uid IS NOT NULL ORDER BY id`).all() as Array<{ id: string; uid: string }>;
+  const byNorm = new Map<string, Array<{ id: string; uid: string }>>();
+  for (const r of rows) {
+    const key = normaliseVatId(r.uid);
+    byNorm.set(key, [...(byNorm.get(key) ?? []), r]);
+  }
+  const groups = [...byNorm.entries()].filter(([, g]) => g.length > 1);
+  if (groups.length === 0) return;
+  log(
+    `local DB: customers share a VAT ID (spellings differ or are identical): ` +
+      groups.map(([norm, g]) => `${norm} (${g.map((r) => `${r.id} "${r.uid}"`).join(", ")})`).join("; ") +
+      `. Their tax data cannot be changed until only one keeps the VAT ID — ` +
+      `run \`erp-mcp customers clear-uid <id>\` on the duplicate.`
+  );
 }
 
 /**
@@ -312,6 +339,7 @@ export function migrateLocalSchema(db: RawDb, log: (msg: string) => void): void 
  * re-runs on every start, so the index appears once the duplicates are gone.
  */
 function ensureUidIndex(db: RawDb, log: (msg: string) => void): void {
+  logUidSpellingVariants(db, log);
   const exists = db
     .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'local_customers_uid_unique'`)
     .get();
@@ -333,44 +361,66 @@ function ensureUidIndex(db: RawDb, log: (msg: string) => void): void {
 }
 
 /**
- * M-A2 (once, recorded in local_schema_migrations): snapshot the customer on
- * every invoice and credit note issued before snapshots existed.
+ * M-A2: snapshot the customer on every invoice and credit note that has none.
+ *
+ * Runs on EVERY start (review 2026-10-21, finding 2), not once: an older
+ * erp-mcp (0.9.5) sharing the data dir — e.g. an npm gateway still pinning it —
+ * keeps writing documents without snapshots into a migrated DB, and those
+ * rows must get one too, or list_*, get_* and credit notes on them fail. The
+ * UPDATEs touch only rows WHERE customer_snapshot_source IS NULL, so a second
+ * run changes nothing. dispatch.ts also runs it (via `healMissingSnapshots`)
+ * before each tool call, for rows such a process writes while this one runs.
  *
  * For those documents the archived PDF (write-once, sha-verified) stays the
  * legal original. The `migrated` snapshot is a best-effort copy of the
- * customer row as it is at migration time — the closest record there is,
- * since 0.9.5 kept no history. A credit note on a pre-migration invoice
- * renders this migrated snapshot. Credit notes copy their invoice's snapshot
- * (they correct that document), not the customer row.
+ * customer row as it is at that moment — the closest record there is, since
+ * 0.9.5 kept no history. Credit notes copy their invoice's snapshot (they
+ * correct that document), not the customer row.
  */
-function snapshotIssuedDocumentsOnce(db: RawDb): void {
-  const done = db.prepare(`SELECT 1 FROM local_schema_migrations WHERE id = 'M-A2'`).get();
-  if (done) return;
-  const fromCustomer = (col: string) =>
-    `(SELECT c.${col} FROM local_customers c WHERE c.id = local_invoices.customer_id)`;
-  const fromInvoice = (col: string) =>
-    `(SELECT i.${col} FROM local_invoices i WHERE i.id = local_credit_notes.invoice_id)`;
+const fromCustomer = (col: string) =>
+  `(SELECT c.${col} FROM local_customers c WHERE c.id = local_invoices.customer_id)`;
+const fromInvoice = (col: string) =>
+  `(SELECT i.${col} FROM local_invoices i WHERE i.id = local_credit_notes.invoice_id)`;
+const SNAPSHOT_BACKFILL = [
+  `UPDATE local_invoices SET
+     customer_name = ${fromCustomer("name")},
+     customer_address_lines = ${fromCustomer("address_lines")},
+     customer_country = ${fromCustomer("country")},
+     customer_uid = ${fromCustomer("uid")},
+     customer_revision = 1,
+     customer_snapshot_source = 'migrated'
+   WHERE customer_snapshot_source IS NULL`,
+  // Invoices first: a credit note copies its invoice's (now filled) snapshot.
+  `UPDATE local_credit_notes SET
+     customer_name = ${fromInvoice("customer_name")},
+     customer_address_lines = ${fromInvoice("customer_address_lines")},
+     customer_country = ${fromInvoice("customer_country")},
+     customer_uid = ${fromInvoice("customer_uid")},
+     customer_revision = 1,
+     customer_snapshot_source = 'migrated'
+   WHERE customer_snapshot_source IS NULL`,
+];
+const ANY_MISSING_SNAPSHOT = `SELECT EXISTS (SELECT 1 FROM local_invoices WHERE customer_snapshot_source IS NULL)
+  OR EXISTS (SELECT 1 FROM local_credit_notes WHERE customer_snapshot_source IS NULL) AS missing`;
+
+function snapshotIssuedDocuments(db: RawDb): void {
   db.transaction(() => {
-    db.exec(`
-      UPDATE local_invoices SET
-        customer_name = ${fromCustomer("name")},
-        customer_address_lines = ${fromCustomer("address_lines")},
-        customer_country = ${fromCustomer("country")},
-        customer_uid = ${fromCustomer("uid")},
-        customer_revision = 1,
-        customer_snapshot_source = 'migrated'
-      WHERE customer_snapshot_source IS NULL;
-      UPDATE local_credit_notes SET
-        customer_name = ${fromInvoice("customer_name")},
-        customer_address_lines = ${fromInvoice("customer_address_lines")},
-        customer_country = ${fromInvoice("customer_country")},
-        customer_uid = ${fromInvoice("customer_uid")},
-        customer_revision = 1,
-        customer_snapshot_source = 'migrated'
-      WHERE customer_snapshot_source IS NULL;
-    `);
-    db.prepare(`INSERT INTO local_schema_migrations (id, applied_at) VALUES ('M-A2', ?)`).run(new Date().toISOString());
+    for (const sql of SNAPSHOT_BACKFILL) db.exec(sql);
+    // Kept as a record of when M-A2 first ran; it no longer gates anything.
+    db.prepare(`INSERT OR IGNORE INTO local_schema_migrations (id, applied_at) VALUES ('M-A2', ?)`).run(new Date().toISOString());
   })();
+}
+
+/**
+ * The same backfill on the running connection: a read-only check first (the
+ * common case writes nothing), the UPDATEs only when a row lacks a snapshot.
+ */
+export async function healMissingSnapshots(db: Db): Promise<void> {
+  const row = await db.get<{ missing: number }>(ANY_MISSING_SNAPSHOT);
+  if (!row?.missing) return;
+  await inTransaction(db, async () => {
+    for (const sql of SNAPSHOT_BACKFILL) await db.run(sql);
+  });
 }
 
 /**
@@ -400,12 +450,15 @@ export interface CreateLocalDbOptions {
 }
 
 export async function createLocalDb(dbPath: string, opts: CreateLocalDbOptions = {}): Promise<Db> {
-  const dir = dbPath.includes("/") ? dbPath.slice(0, dbPath.lastIndexOf("/")) : "";
-  if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const dir = dirname(dbPath);
+  if (dir && dir !== "." && !existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const { default: Database } = await import("better-sqlite3");
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
+  // Another process on the same file (the CLI, an older erp-mcp) waits for the
+  // write lock instead of failing at once (write-lock.ts uses BEGIN IMMEDIATE).
+  db.pragma("busy_timeout = 5000");
   migrateLocalSchema(db, opts.log ?? ((msg) => console.error(`[erp-mcp] ${msg}`)));
 
   return {

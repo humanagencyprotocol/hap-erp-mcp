@@ -137,12 +137,12 @@ export const QUOTE_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
     description:
       "Revise an issued quote: produces the next revision with its own archived PDF (same number). Omitted lines, " +
       "valid_until and notes are kept. Takes the customer's current data. Refused for a quote already invoiced. " +
-      "`revision`, when given, must be the quote's current revision.",
+      "`revision` is required and must be the quote's current revision.",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "Quote ID or number" },
-        revision: { type: "number", description: "The quote's current revision (optional; refused if the quote has moved on)" },
+        revision: { type: "number", description: "The quote's current revision (required; refused if the quote has moved on)" },
         document_date: DOCUMENT_DATE_FIELD,
         lines: { type: "array", items: QUOTE_LINE_SCHEMA, description: "Replacement lines (optional — omit to keep)" },
         value: VALUE_FIELD,
@@ -152,7 +152,7 @@ export const QUOTE_TOOL_DEFINITIONS: readonly LocalToolDefinition[] = [
         notes: NOTES_FIELD,
         ticket_id: TICKET_FIELD,
       },
-      required: ["id", "document_date", "value", "discount_pct", "currency"],
+      required: ["id", "revision", "document_date", "value", "discount_pct", "currency"],
     },
   },
   {

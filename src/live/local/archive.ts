@@ -4,13 +4,15 @@
  * namespace (see db.ts) means invoices and credit notes never collide on
  * this path even though they share one directory per year.
  *
- * `writeOnce` never overwrites an existing file (`wx` — exclusive create) and
- * is called BEFORE any database row is written: if it throws, nothing is
- * issued — no row, no number consumed (dispatch's callers must preserve that
- * ordering; see tools/invoices.ts).
+ * `writeOnce` never overwrites an existing file (`wx` — exclusive create). It
+ * is called as the LAST step inside the document's DB transaction
+ * (write-lock.ts): if it throws, the transaction rolls back — no row, no
+ * number consumed; if the transaction fails after it, the caller deletes the
+ * file it just wrote (`removeArchived`) — never an orphan PDF.
  */
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs";
 import { createHash } from "crypto";
+import * as nodePath from "path";
 import { join, resolve, relative, isAbsolute, sep } from "path";
 
 export function archiveDir(dataDir: string): string {
@@ -54,9 +56,18 @@ export interface ArchivedFile {
   sha256: string;
 }
 
+/**
+ * The directory of an archive path. path.dirname — not lastIndexOf("/"), which
+ * on Windows (path.join builds `C:\data\…\R-1.pdf`) found no "/" and
+ * created junk directories. `api` lets the tests check the win32 behaviour.
+ */
+export function parentDirOf(path: string, api: Pick<typeof nodePath, "dirname"> = nodePath): string {
+  return api.dirname(path);
+}
+
 /** Writes `buf` to `path`, refusing if it already exists. Throws (unmodified) on any other fs failure. */
 export function writeOnce(path: string, buf: Buffer): ArchivedFile {
-  const dir = path.slice(0, path.lastIndexOf("/"));
+  const dir = parentDirOf(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   try {
     writeFileSync(path, buf, { flag: "wx" });
@@ -67,6 +78,18 @@ export function writeOnce(path: string, buf: Buffer): ArchivedFile {
     throw new Error(`Refused: could not write the archive at ${path} (${err?.message ?? err}). Nothing was issued.`);
   }
   return { path, sha256: sha256(buf) };
+}
+
+/**
+ * Deletes a file THIS call just wrote with writeOnce, after its transaction
+ * failed. Never used on a file the call did not create.
+ */
+export function removeArchived(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") throw err;
+  }
 }
 
 /** Reads the archived file and verifies its sha256 still matches what was stored at issue time. */

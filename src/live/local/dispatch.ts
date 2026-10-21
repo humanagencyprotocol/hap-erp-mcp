@@ -18,6 +18,8 @@ import * as invoices from "./tools/invoices.js";
 import type { LocalCtx } from "./tools/invoices.js";
 import { QUOTE_TOOL_HANDLERS } from "./tools/quotes.js";
 import { ITEM_TOOL_HANDLERS } from "./tools/items.js";
+import { withLocalLock } from "./write-lock.js";
+import { healMissingSnapshots } from "./db.js";
 
 export type LocalToolHandler = (db: Db, args: Record<string, any>, ctx: LocalCtx) => Promise<unknown>;
 
@@ -90,5 +92,11 @@ export async function callLocalTool(db: Db, name: string, args: Record<string, a
   }
   // The customer tools also get the VIES client (the one outside call, vies.ts).
   const ctx = { ...buildLocalCtx(env), vies: viesClientFromEnv(env) };
-  return handler(db, args, ctx);
+  // One queue for every Local call (write-lock.ts): writes never interleave,
+  // and no read sees a write's uncommitted rows. Before each call, documents
+  // an older erp-mcp wrote into this DB meanwhile get their snapshot (db.ts).
+  return withLocalLock(async () => {
+    await healMissingSnapshots(db);
+    return handler(db, args, ctx);
+  });
 }

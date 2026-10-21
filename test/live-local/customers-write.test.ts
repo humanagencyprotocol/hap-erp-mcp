@@ -19,6 +19,7 @@ afterEach(async () => {
 });
 
 const AT = { name: "Drautal Maschinenbau GmbH", address_lines: ["Industriestraße 12", "9800 Spittal"], country: "AT", uid: "ATU12345678" };
+const AT_NO_UID = { name: "Huber e.U.", address_lines: ["Hauptplatz 3", "4020 Linz"], country: "AT" };
 const revisions = (id: string) =>
   db.all<any>(`SELECT revision, content, ticket_id FROM local_master_revisions WHERE entity = 'customer' AND entity_id = ? ORDER BY revision`, [id]);
 
@@ -125,19 +126,37 @@ describe("R11: revision rule", () => {
 
   it("identical tax data is refused (a revision must mean a change)", async () => {
     ({ db, ctx, dataDir } = await freshLocalCtx("cw-same"));
-    const c = await create_customer(db, AT, withVies(ctx));
-    await expect(update_customer_tax_data(db, { id: c.id, revision: 1, ...AT, uid: "ATU 1234 5678" }, withVies(ctx))).rejects.toThrow(
+    const c = await create_customer(db, AT_NO_UID, withVies(ctx));
+    await expect(update_customer_tax_data(db, { id: c.id, revision: 1, ...AT_NO_UID, uid: null }, withVies(ctx))).rejects.toThrow(
       /nothing would change.*Nothing was saved/
     );
     await expect(update_customer(db, { id: c.id, revision: 1, email: null }, withVies(ctx))).rejects.toThrow(/nothing would change/);
   });
 
-  it("…except the same EU VAT ID not yet confirmed: that re-runs VIES (the way to 'confirm the VAT ID first', D1)", async () => {
+  it("…except the same EU VAT ID: that re-runs VIES (the way to 'confirm the VAT ID first', D1)", async () => {
     ({ db, ctx, dataDir } = await freshLocalCtx("cw-recheck"));
     const c = await create_customer(db, AT, withVies(ctx, stubVies({ ATU12345678: "not_checked" })));
     const again = await update_customer_tax_data(db, { id: c.id, revision: 1, ...AT }, withVies(ctx));
     expect(again).toMatchObject({ revision: 2, vies: { status: "valid" } });
-    await expect(update_customer_tax_data(db, { id: c.id, revision: 2, ...AT }, withVies(ctx))).rejects.toThrow(/nothing would change/);
+  });
+
+  it("finding 7: a stored `valid` can be refreshed — identical data re-runs VIES and stores the new result", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("cw-refresh"));
+    const c = await create_customer(db, AT, withVies(ctx));
+    expect(c.vies_status).toBe("valid");
+    const refreshed = await update_customer_tax_data(db, { id: c.id, revision: 1, ...AT, uid: "ATU 1234 5678" }, withVies(ctx));
+    expect(refreshed).toMatchObject({ revision: 2, vies: { status: "valid" } });
+    expect(refreshed.vies!.checked_at).not.toBeNull();
+  });
+
+  it("finding 7: an edit during a VIES outage stores not_checked; resubmitting the same data then confirms it", async () => {
+    ({ db, ctx, dataDir } = await freshLocalCtx("cw-outage"));
+    const c = await create_customer(db, AT, withVies(ctx));
+    const down = withVies(ctx, stubVies({ ATU12345678: "not_checked" }));
+    const edited = await update_customer_tax_data(db, { id: c.id, revision: 1, ...AT, name: "Renamed GmbH" }, down);
+    expect(edited.vies_status).toBe("not_checked");
+    const confirmed = await update_customer_tax_data(db, { id: c.id, revision: 2, ...AT, name: "Renamed GmbH" }, withVies(ctx));
+    expect(confirmed).toMatchObject({ revision: 3, vies_status: "valid", name: "Renamed GmbH" });
   });
 
   it("CLI customers keep working: revision 1, no VIES (null = never checked)", async () => {
