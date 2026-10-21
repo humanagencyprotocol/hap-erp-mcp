@@ -12,7 +12,7 @@ import type { Db } from "../../db.js";
 import { resolveLiveCompany, type LiveCompany } from "./company-file.js";
 import { resolveTemplate } from "./template.js";
 import { LOCAL_TOOL_DEFINITIONS } from "./definitions.js";
-import { CUSTOMER_TOOL_HANDLERS } from "./tools/customers.js";
+import { CUSTOMER_TOOL_HANDLERS, SELF_LOCKING_TOOLS } from "./tools/customers.js";
 import { viesClientFromEnv } from "./vies.js";
 import * as invoices from "./tools/invoices.js";
 import type { LocalCtx } from "./tools/invoices.js";
@@ -95,6 +95,12 @@ export async function callLocalTool(db: Db, name: string, args: Record<string, a
   // One queue for every Local call (write-lock.ts): writes never interleave,
   // and no read sees a write's uncommitted rows. Before each call, documents
   // an older erp-mcp wrote into this DB meanwhile get their snapshot (db.ts).
+  // The VIES tools lock only around their DB steps, never across the outside
+  // call (customers.ts) — a card read must not wait up to 8 s behind VIES.
+  if (SELF_LOCKING_TOOLS.has(name)) {
+    await withLocalLock(() => healMissingSnapshots(db));
+    return handler(db, args, ctx);
+  }
   return withLocalLock(async () => {
     await healMissingSnapshots(db);
     return handler(db, args, ctx);

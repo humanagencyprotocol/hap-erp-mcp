@@ -22,12 +22,12 @@
 import { randomUUID } from "crypto";
 import type { Db } from "../../../db.js";
 import type { LocalCtx } from "./invoices.js";
-import { deriveTaxMode, type TaxMode } from "../tax.js";
+import { deriveTaxMode, isOutsideEuVatArea, type TaxMode } from "../tax.js";
 import { checkVatIdFormat, isViesCountry, normaliseVatId, refuseIfBadVatIdFormat, type VatIdFormat } from "../vat-id.js";
 import {
   notApplicable, notChecked, viesClientFromEnv, PREVIEW_VIES_TIMEOUT_MS, type ViesClient, type ViesResult,
 } from "../vies.js";
-import { inTransaction, locked } from "../write-lock.js";
+import { inTransaction, locked, withLocalLock } from "../write-lock.js";
 
 /** LocalCtx plus the VIES client (dispatch passes one built from env; tests inject a stub). */
 export type CustomerCtx = LocalCtx & { vies?: ViesClient; now?: () => Date };
@@ -65,23 +65,35 @@ export interface LocalCustomerView {
   vies_status: ViesResult["status"] | null;
   /**
    * Tax treatment a new invoice to this customer would get now — the same
-   * deriveTaxMode create_invoice uses. Set whenever the tool runs with the
-   * company file (every MCP call); absent only for CLI output.
+   * deriveTaxMode create_invoice uses, or `unsupported` for a customer outside
+   * the EU VAT area (create_invoice / create_quote refuse those, tax.ts). Set
+   * whenever the tool runs with the company file (every MCP call); absent
+   * only for CLI output.
    */
-  tax_mode?: TaxMode;
+  tax_mode?: CustomerTaxMode;
   tax_mode_label?: string;
   created_at: string;
   updated_at: string | null;
 }
 
+/** A customer's tax treatment as the customer reads report it: a TaxMode, or `unsupported`. */
+export type CustomerTaxMode = TaxMode | "unsupported";
+
 /** Human-readable labels for tax-mode codes. */
-export const TAX_MODE_LABELS: Readonly<Record<TaxMode, string>> = {
+export const TAX_MODE_LABELS: Readonly<Record<CustomerTaxMode, string>> = {
   normal: "Normal VAT",
   reverse_charge: "Reverse charge",
   kleinunternehmer: "Small-business exemption (Kleinunternehmer)",
+  unsupported: "Not supported (outside the EU)",
 };
 
-function taxModeFor(ctx: LocalCtx, country: string, uid: string | null): TaxMode {
+/**
+ * `unsupported` for a customer outside the EU VAT area (XI, CH, GB, …) —
+ * consistent with the refusal on invoices and quotes (Andreas's decision on
+ * review finding 3); never "Normal VAT" for a customer nothing can be issued to.
+ */
+function taxModeFor(ctx: LocalCtx, country: string, uid: string | null): CustomerTaxMode {
+  if (isOutsideEuVatArea(ctx.company.address.country_code, country)) return "unsupported";
   return deriveTaxMode({
     vatMode: ctx.company.vat_mode, homeCountryCode: ctx.company.address.country_code,
     customerCountryCode: country, customerUid: uid,
@@ -337,7 +349,16 @@ async function recheckInTransaction(
 
 // --- Writes ---
 
-export const create_customer = locked(async function create_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
+/**
+ * The VIES call (up to ERP_VIES_TIMEOUT_MS, default 8 s) runs OUTSIDE the
+ * Local lock (write-lock.ts): a card read or another write never waits behind
+ * it. The steps before it (early refusals) and after it (re-check + write)
+ * each take the lock; the re-check inside the transaction catches whatever
+ * changed while VIES was answering. The stored result is still the
+ * execution-time answer. dispatch.ts does not wrap these tools in the lock
+ * (SELF_LOCKING_TOOLS).
+ */
+export async function create_customer(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
   let c: ReturnType<typeof validateNewCustomer>;
   try {
     c = validateNewCustomer({ ...args, uid: undefined, id: undefined }, "customer");
@@ -345,28 +366,30 @@ export const create_customer = locked(async function create_customer(db: Db, arg
     throw refused(err);
   }
   const uid = storableUid(c.country, args.uid, "customer");
-  await refuseDuplicates(db, uid, c.crm_contact_id);
+  await withLocalLock(() => refuseDuplicates(db, uid, c.crm_contact_id));
 
-  const vies = uid ? await runVies(ctx, c.country, uid) : null;
+  const vies = uid ? await runVies(ctx, c.country, uid) : null; // no lock held
   if (uid && vies) refuseIfViesInvalid(uid, vies);
 
   const id = randomUUID();
   const at = (ctx.now?.() ?? new Date()).toISOString();
   const ticketId = typeof args.ticket_id === "string" ? args.ticket_id : null;
-  await inTransaction(db, async () => {
-    await recheckInTransaction(db, null, null, uid, c.crm_contact_id);
-    await db.run(
-      `INSERT INTO local_customers (id, name, address_lines, country, uid, email, crm_contact_id, revision, created_at, updated_at,
-         vies_status, vies_reason, vies_checked_at, vies_request_id, vies_name, vies_address)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, c.name, JSON.stringify(c.address_lines), c.country, uid, c.email, c.crm_contact_id, at, at, ...viesParams(vies)]
-    );
-    await writeRevision(db, id, 1, {
-      name: c.name, address_lines: c.address_lines, country: c.country, uid, email: c.email, crm_contact_id: c.crm_contact_id,
-    }, ticketId, at);
+  return withLocalLock(async () => {
+    await inTransaction(db, async () => {
+      await recheckInTransaction(db, null, null, uid, c.crm_contact_id);
+      await db.run(
+        `INSERT INTO local_customers (id, name, address_lines, country, uid, email, crm_contact_id, revision, created_at, updated_at,
+           vies_status, vies_reason, vies_checked_at, vies_request_id, vies_name, vies_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, c.name, JSON.stringify(c.address_lines), c.country, uid, c.email, c.crm_contact_id, at, at, ...viesParams(vies)]
+      );
+      await writeRevision(db, id, 1, {
+        name: c.name, address_lines: c.address_lines, country: c.country, uid, email: c.email, crm_contact_id: c.crm_contact_id,
+      }, ticketId, at);
+    });
+    return withTaxMode(toView(await requireLocalCustomer(db, id)), ctx);
   });
-  return withTaxMode(toView(await requireLocalCustomer(db, id)), ctx);
-});
+}
 
 const TAX_FIELDS = ["name", "address_lines", "country", "uid"] as const;
 
@@ -420,7 +443,8 @@ function sameTaxData(row: LocalCustomer, t: TaxShape & { uid: string | null }): 
   );
 }
 
-export const update_customer_tax_data = locked(async function update_customer_tax_data(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
+/** As create_customer: VIES outside the lock, refusals and the write each under it. */
+export async function update_customer_tax_data(db: Db, args: Record<string, any>, ctx: CustomerCtx): Promise<LocalCustomerView> {
   const missing = TAX_FIELDS.filter((f) => args[f] === undefined);
   if (missing.length > 0) {
     throw refused(new Error(`${missing.join(", ")} required — tax data is replaced as a whole (uid: null removes the VAT ID)`));
@@ -433,8 +457,11 @@ export const update_customer_tax_data = locked(async function update_customer_ta
   }
   const uid = storableUid(shape.country, args.uid, "customer");
   const revision = requireRevisionArg(args);
-  const row = await requireLocalCustomer(db, args.id);
-  await refuseDuplicates(db, uid, null, row.id);
+  const row = await withLocalLock(async () => {
+    const r = await requireLocalCustomer(db, args.id);
+    await refuseDuplicates(db, uid, null, r.id);
+    return r;
+  });
   refuseStaleRevision(row, revision);
 
   // A revision must mean a change — with one exception: the same VIES VAT ID
@@ -449,23 +476,26 @@ export const update_customer_tax_data = locked(async function update_customer_ta
     }
   }
 
-  const vies = uid ? await runVies(ctx, shape.country, uid) : null;
+  const vies = uid ? await runVies(ctx, shape.country, uid) : null; // no lock held
   if (uid && vies) refuseIfViesInvalid(uid, vies);
 
   const at = (ctx.now?.() ?? new Date()).toISOString();
+  // `row` is unchanged when the transaction's revision re-check passes (every change makes a new revision).
   const next: CustomerRevisionContent = { ...contentOf(row), ...shape, uid };
-  await inTransaction(db, async () => {
-    await recheckInTransaction(db, row.id, revision, uid, null);
-    await db.run(
-      `UPDATE local_customers SET name = ?, address_lines = ?, country = ?, uid = ?, revision = ?, updated_at = ?,
-         vies_status = ?, vies_reason = ?, vies_checked_at = ?, vies_request_id = ?, vies_name = ?, vies_address = ?
-       WHERE id = ?`,
-      [shape.name, JSON.stringify(shape.address_lines), shape.country, uid, revision + 1, at, ...viesParams(vies), row.id]
-    );
-    await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
+  return withLocalLock(async () => {
+    await inTransaction(db, async () => {
+      await recheckInTransaction(db, row.id, revision, uid, null);
+      await db.run(
+        `UPDATE local_customers SET name = ?, address_lines = ?, country = ?, uid = ?, revision = ?, updated_at = ?,
+           vies_status = ?, vies_reason = ?, vies_checked_at = ?, vies_request_id = ?, vies_name = ?, vies_address = ?
+         WHERE id = ?`,
+        [shape.name, JSON.stringify(shape.address_lines), shape.country, uid, revision + 1, at, ...viesParams(vies), row.id]
+      );
+      await writeRevision(db, row.id, revision + 1, next, typeof args.ticket_id === "string" ? args.ticket_id : null, at);
+    });
+    return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
   });
-  return withTaxMode(toView(await requireLocalCustomer(db, row.id)), ctx);
-});
+}
 
 // --- Card-only preview reads (§3.4) ---
 
@@ -485,7 +515,7 @@ async function vatCheck(db: Db, ctx: CustomerCtx, country: string, rawUid: strin
       : check.format === "not_applicable"
         ? notApplicable()
         : notChecked("VAT ID format is wrong — not sent to VIES", ctx.now?.() ?? new Date());
-  const owner = await uidOwner(db, check.uid, exceptId);
+  const owner = await withLocalLock(() => uidOwner(db, check.uid, exceptId)); // VIES above ran without the lock
   return { uid: check.uid, format: check.format, vies, duplicate: owner !== null, duplicate_of: owner };
 }
 
@@ -523,48 +553,61 @@ export async function check_customer_duplicates(db: Db, args: Record<string, any
 
 /** What update_customer_tax_data would change, for the card (R4: issued documents keep the old data). */
 export async function preview_customer_change(db: Db, args: Record<string, any>, ctx: CustomerCtx) {
-  const row = await requireLocalCustomer(db, args.id);
-  const shape = validateTaxShape(args, "customer");
-  // Absent uid = no VAT ID (the governing layer omits absent arguments).
-  const uid = typeof args.uid === "string" && args.uid.trim() ? normaliseVatId(args.uid) : null;
-  const current = {
-    name: row.name, address_lines: JSON.parse(row.address_lines) as string[], country: row.country, uid: row.uid,
-    revision: row.revision,
-  };
-  const changed: string[] = [];
-  if (shape.name !== current.name) changed.push("name");
-  if (JSON.stringify(shape.address_lines) !== JSON.stringify(current.address_lines)) changed.push("address_lines");
-  if (shape.country !== current.country) changed.push("country");
-  if (uid !== (current.uid === null ? null : normaliseVatId(current.uid))) changed.push("uid");
+  // DB reads under the lock; the VAT-ID check (VIES, ≤ 4 s) after it, without.
+  const out = await withLocalLock(async () => {
+    const row = await requireLocalCustomer(db, args.id);
+    const shape = validateTaxShape(args, "customer");
+    // Absent uid = no VAT ID (the governing layer omits absent arguments).
+    const uid = typeof args.uid === "string" && args.uid.trim() ? normaliseVatId(args.uid) : null;
+    const current = {
+      name: row.name, address_lines: JSON.parse(row.address_lines) as string[], country: row.country, uid: row.uid,
+      revision: row.revision,
+    };
+    const changed: string[] = [];
+    if (shape.name !== current.name) changed.push("name");
+    if (JSON.stringify(shape.address_lines) !== JSON.stringify(current.address_lines)) changed.push("address_lines");
+    if (shape.country !== current.country) changed.push("country");
+    if (uid !== (current.uid === null ? null : normaliseVatId(current.uid))) changed.push("uid");
 
-  const taxMode = (country: string, customerUid: string | null) => taxModeFor(ctx, country, customerUid);
-  const now = taxMode(current.country, current.uid);
-  const after = taxMode(shape.country, uid);
+    const taxMode = (country: string, customerUid: string | null) => taxModeFor(ctx, country, customerUid);
+    const now = taxMode(current.country, current.uid);
+    const after = taxMode(shape.country, uid);
 
-  const invoices = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_invoices WHERE customer_id = ?`, [row.id]);
-  const creditNotes = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_credit_notes WHERE customer_id = ?`, [row.id]);
-  const last = await db.get<{ number: string }>(
-    `SELECT number FROM (
-       SELECT number, issued_at FROM local_invoices WHERE customer_id = ?
-       UNION ALL SELECT number, issued_at FROM local_credit_notes WHERE customer_id = ?
-     ) ORDER BY issued_at DESC, number DESC LIMIT 1`,
-    [row.id, row.id]
-  );
-  const openQuotes = await db.get<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM local_quotes WHERE customer_id = ? AND status IN ('draft','sent')`, [row.id]
-  );
+    const invoices = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_invoices WHERE customer_id = ?`, [row.id]);
+    const creditNotes = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM local_credit_notes WHERE customer_id = ?`, [row.id]);
+    const last = await db.get<{ number: string }>(
+      `SELECT number FROM (
+         SELECT number, issued_at FROM local_invoices WHERE customer_id = ?
+         UNION ALL SELECT number, issued_at FROM local_credit_notes WHERE customer_id = ?
+       ) ORDER BY issued_at DESC, number DESC LIMIT 1`,
+      [row.id, row.id]
+    );
+    const openQuotes = await db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM local_quotes WHERE customer_id = ? AND status IN ('draft','sent')`, [row.id]
+    );
 
-  return {
-    current,
-    revision: row.revision,
-    changed,
-    uid_or_country_changed: changed.includes("uid") || changed.includes("country"),
-    tax_mode: { now, after, now_label: TAX_MODE_LABELS[now], after_label: TAX_MODE_LABELS[after] },
-    issued_documents: { invoices: invoices?.n ?? 0, credit_notes: creditNotes?.n ?? 0, last_number: last?.number ?? null },
-    open_quotes: openQuotes?.n ?? 0,
-    vat_check: uid ? await vatCheck(db, ctx, shape.country, uid, row.id) : null,
-  };
+    return {
+      current,
+      revision: row.revision,
+      changed,
+      uid_or_country_changed: changed.includes("uid") || changed.includes("country"),
+      tax_mode: { now, after, now_label: TAX_MODE_LABELS[now], after_label: TAX_MODE_LABELS[after] },
+      issued_documents: { invoices: invoices?.n ?? 0, credit_notes: creditNotes?.n ?? 0, last_number: last?.number ?? null },
+      open_quotes: openQuotes?.n ?? 0,
+      vatCheckArgs: uid ? { country: shape.country, uid, id: row.id } : null,
+    };
+  });
+  const { vatCheckArgs, ...rest } = out;
+  return { ...rest, vat_check: vatCheckArgs ? await vatCheck(db, ctx, vatCheckArgs.country, vatCheckArgs.uid, vatCheckArgs.id) : null };
 }
+
+/**
+ * Tools that take the Local lock themselves around their DB steps but never
+ * across their VIES call — dispatch.ts runs them without the outer lock.
+ */
+export const SELF_LOCKING_TOOLS: ReadonlySet<string> = new Set([
+  "create_customer", "update_customer_tax_data", "check_vat_id", "preview_customer_change",
+]);
 
 // --- Issuing guard (Andreas's decision D1) ---
 

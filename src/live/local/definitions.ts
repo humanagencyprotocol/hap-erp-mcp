@@ -226,7 +226,8 @@ const CUSTOMER_TOOL_DEFINITIONS = [
     description:
       "Get a single customer (name, address, country, VAT ID, email, CRM contact, revision, last VIES check as " +
       "`vies` and `vies_status`), plus `tax_mode` / `tax_mode_label`: the tax treatment a new invoice to this customer " +
-      "would get now. A reverse-charge invoice is issued only if `vies_status` is \"valid\". " +
+      "would get now (\"unsupported\" for a customer outside the EU VAT area: invoices and quotes to it are refused). " +
+      "A reverse-charge invoice is issued only if `vies_status` is \"valid\". " +
       "With `revision`, returns that older revision's content (no VIES result is kept for old revisions).",
     inputSchema: {
       type: "object",
