@@ -44,7 +44,7 @@ const SERVICE_PERIOD_SCHEMA = {
   required: ["from", "to"],
 };
 
-// One consistent field name on every document-producing tool (Andreas,
+// One consistent field name on every document-producing tool (maintainer,
 // 2026-10-18): the date comes WITH the request, never "now" — see
 // tools/invoices.ts and date.ts.
 const DOCUMENT_DATE_FIELD = {

@@ -39,7 +39,7 @@ export interface LiveCompany {
   vat_mode: "normal" | "kleinunternehmer";
   /**
    * IANA timezone (e.g. "Europe/Vienna") whose calendar date is "today" for
-   * the create_invoice/create_credit_note document_date check (Andreas,
+   * the create_invoice/create_credit_note document_date check (maintainer,
    * 2026-10-18) — never the server process's own local timezone. Optional;
    * defaults to "Europe/Vienna" (Suveren's home jurisdiction) if the person
    * does not set one.

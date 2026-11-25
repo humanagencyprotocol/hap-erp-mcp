@@ -1,5 +1,5 @@
 /**
- * Invoicing (Andreas, 2026-10-17 — German/Austrian invoicing law): an issued
+ * Invoicing (maintainer, 2026-10-17 — German/Austrian invoicing law): an issued
  * invoice is never changed or deleted; a cancellation or correction is a
  * credit note with its own number. Per doc/engineering.md rule 4 ("test
  * refusals harder than successes"), most of this file is refusal cases, one

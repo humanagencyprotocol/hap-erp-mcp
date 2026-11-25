@@ -1,6 +1,6 @@
 /**
  * Part B — quotes in ERP Local (docs/local-production-contract.md §4 with
- * Andreas's decisions §12 D2/D3): numbers come with the request in their own
+ * the maintainer's decisions §12 D2/D3): numbers come with the request in their own
  * series, the PDF is issued at create/update (no send step), the revision
  * rule, and "nothing on refusal".
  */

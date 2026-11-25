@@ -1,5 +1,5 @@
 /**
- * The document date (Andreas, 2026-10-18): `document_date` comes WITH the
+ * The document date (maintainer, 2026-10-18): `document_date` comes WITH the
  * request — this connector never substitutes "now" for it. It is printed on
  * the invoice/credit note and used to compute the due date. `preview_invoice`
  * accepts any date (an approver should be able to see the PDF as it would

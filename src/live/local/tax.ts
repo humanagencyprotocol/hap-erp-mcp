@@ -1,5 +1,5 @@
 /**
- * Tax mode derivation for a local invoice/credit note (Andreas, 2026-10-17):
+ * Tax mode derivation for a local invoice/credit note (maintainer, 2026-10-17):
  *
  *   reverse_charge   customer's country is an EU member state other than the
  *                    company's home country, AND the customer has a UID
@@ -10,7 +10,7 @@
  * Reverse charge is refused outright without a customer UID (never silently
  * downgraded to `normal`) — see refuseIfInvalid below.
  *
- * Customers outside the EU VAT area (Andreas's decision on review finding 3,
+ * Customers outside the EU VAT area (the maintainer's decision on review finding 3,
  * 2026-10-21, option A): any customer country other than the home country
  * and the EU member states — Northern Ireland (XI), CH, GB, US, … — is
  * REFUSED for invoices, quotes and quote → invoice conversion, with or

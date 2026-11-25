@@ -1,6 +1,6 @@
 /**
  * Local quotes (Part B, docs/local-production-contract.md §4 as amended by
- * Andreas's decisions §12 D2/D3).
+ * the maintainer's decisions §12 D2/D3).
  *
  * A Local quote works like an invoice:
  *

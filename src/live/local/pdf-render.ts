@@ -7,7 +7,7 @@
  * blocks appear, their texts, their conditions — comes from the template.
  * No code runs from a template.
  *
- * Deterministic by construction (Andreas, 2026-10-18): CreationDate/ModDate
+ * Deterministic by construction (maintainer, 2026-10-18): CreationDate/ModDate
  * are set to the document's own `document_date` (never "now" — see
  * tools/invoices.ts and date.ts), `compress: false` avoids zlib as a source
  * of variance, and only the standard (non-embedded) Helvetica family is used,
