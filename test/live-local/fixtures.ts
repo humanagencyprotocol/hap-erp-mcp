@@ -13,12 +13,12 @@ import type { Db } from "../../src/db.js";
 
 // MUSTER = placeholder test data, never real company data.
 export const MUSTER_COMPANY: LiveCompany = parseLiveCompany({
-  name: "Suveren",
-  owner: "Andreas Schadauer MUSTER",
+  name: "Muster Maschinenteile GmbH",
+  owner: "Maria MUSTER",
   address: { street: "MUSTER-Straße 1", zip: "1010", city: "Wien", country: "Österreich", country_code: "AT" },
   uid: "ATU00000000",
-  email: "andreas@sublin.app",
-  web: "www.suveren.ai",
+  email: "office@muster.example",
+  web: "www.muster.example",
   register: null,
   bank: { name: "MUSTER Bank", iban: "AT00 0000 0000 0000 0000", bic: "MUSTERBIC" },
   default_payment_term_days: 14,
