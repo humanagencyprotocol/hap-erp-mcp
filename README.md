@@ -2,7 +2,7 @@
 
 A generic ERP for AI agents, built as an [MCP](https://modelcontextprotocol.io) server and gated through the [Human Agency Protocol](https://humanagencyprotocol.org).
 
-> **@humanagencyp/erp-mcp** — unpublished (version 0.1.0, not yet on npm)
+> **@humanagencyp/erp-mcp** — on npm (0.10.0)
 
 ---
 
@@ -243,7 +243,7 @@ refusal with the `ticket_id` of the ticket whose action did not happen.
 ## HAP Profile
 
 This server is gated through the `sales` profile
-(`github.com/humanagencyprotocol/hap-profiles/sales@0.1`):
+(`github.com/humanagencyprotocol/hap-profiles/sales@0.4`):
 
 - **Action types** — `quote`, `send`, `order`
 - **Bounds** — `read_access`, `value_max`, `discount_max`, `order_value_daily_max`,
