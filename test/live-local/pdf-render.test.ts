@@ -200,7 +200,7 @@ describe("v4 (default): line spacing and the total's rule gap come from the temp
   });
 });
 
-describe("v4 letterhead and totals (Andreas 2026-10-19)", () => {
+describe("v4 letterhead and totals (maintainer 2026-10-19)", () => {
   const vm = (logo?: string) => buildViewModel({
     company: { ...MUSTER_COMPANY, ...(logo ? { logo_svg: logo } : {}) }, customer: { name: "Test", addressLines: ["Viktorgasse 1", "1040 Wien"] },
     documentKind: "invoice", number: "T-3", issuedAt: new Date("2026-10-19"),

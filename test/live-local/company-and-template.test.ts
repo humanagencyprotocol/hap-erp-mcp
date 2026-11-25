@@ -99,7 +99,7 @@ describe("settings paths and emptied fields (found 2026-10-18 on the first real 
   });
 });
 
-describe("company logo (logo_svg) — Andreas 2026-10-19", () => {
+describe("company logo (logo_svg) — maintainer 2026-10-19", () => {
   const withFiles = async (files: Record<string, string>) => {
     const { mkdtempSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

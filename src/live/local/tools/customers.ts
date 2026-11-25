@@ -89,7 +89,7 @@ export const TAX_MODE_LABELS: Readonly<Record<CustomerTaxMode, string>> = {
 
 /**
  * `unsupported` for a customer outside the EU VAT area (XI, CH, GB, …) —
- * consistent with the refusal on invoices and quotes (Andreas's decision on
+ * consistent with the refusal on invoices and quotes (the maintainer's decision on
  * review finding 3); never "Normal VAT" for a customer nothing can be issued to.
  */
 function taxModeFor(ctx: LocalCtx, country: string, uid: string | null): CustomerTaxMode {
@@ -467,7 +467,7 @@ export async function update_customer_tax_data(db: Db, args: Record<string, any>
   // A revision must mean a change — with one exception: the same VIES VAT ID
   // may be submitted unchanged to re-run the check, whatever was stored last
   // (review finding 7): it is how a `not_checked` is confirmed (a reverse-
-  // charge invoice needs `valid` — Andreas's decision D1), and how an old
+  // charge invoice needs `valid` — the maintainer's decision D1), and how an old
   // `valid` is refreshed. The result of this run is what is stored.
   if (sameTaxData(row, { ...shape, uid })) {
     const recheck = uid !== null && isViesCountry(shape.country);
@@ -609,7 +609,7 @@ export const SELF_LOCKING_TOOLS: ReadonlySet<string> = new Set([
   "create_customer", "update_customer_tax_data", "check_vat_id", "preview_customer_change",
 ]);
 
-// --- Issuing guard (Andreas's decision D1) ---
+// --- Issuing guard (the maintainer's decision D1) ---
 
 /**
  * A NEW reverse-charge invoice (incl. a quote → invoice conversion, which

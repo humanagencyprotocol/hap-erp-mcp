@@ -23,9 +23,9 @@ const TODAY = todayInTimezone("Europe/Vienna");
 const YEAR = TODAY.slice(0, 4);
 
 const MUSTER_COMPANY_JSON = {
-  name: "Suveren", owner: "Andreas Schadauer MUSTER",
+  name: "Suveren", owner: "Maria Berger MUSTER",
   address: { street: "MUSTER-Straße 1", zip: "1010", city: "Wien", country: "Österreich", country_code: "AT" },
-  uid: "ATU00000000", email: "andreas@sublin.app", web: "www.suveren.ai", register: null,
+  uid: "ATU00000000", email: "owner@example.com", web: "www.suveren.ai", register: null,
   bank: { name: "MUSTER Bank", iban: "AT00", bic: "MUSTERBIC" },
   default_payment_term_days: 14, vat_mode: "normal",
 };

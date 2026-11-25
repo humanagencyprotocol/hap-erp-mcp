@@ -1,5 +1,5 @@
 /**
- * preview_customer_change (§3.4, R4) and the D1 issuing guard (Andreas's
+ * preview_customer_change (§3.4, R4) and the D1 issuing guard (the maintainer's
  * decision: reverse charge only with a stored VIES `valid`).
  */
 import { describe, it, expect, afterEach } from "vitest";

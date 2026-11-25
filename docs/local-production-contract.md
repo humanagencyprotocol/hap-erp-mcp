@@ -3,7 +3,7 @@
 Status: **contract, not code** (2026-10-21). Parallel worktrees build from this file; a change to it
 goes through the contract owner (Part 0 below), never silently in a part's branch.
 
-Decisions this contract rests on (Andreas, 2026-10-21):
+Decisions this contract rests on (maintainer, 2026-10-21):
 
 - Customer master data belongs to the **invoicing** area. Catalogue items too (same reasoning:
   an item's price and VAT rate end up on invoices).
@@ -40,7 +40,7 @@ tests exist and pass. (R1–R7 come from the session that built ERP Local, 2026-
 | R9 | **Customer writes live in exactly one area.** Write tools carry `"profile": "invoicing"` in the manifest; `readAlsoUnder` is for reads only and never appears on a write override. The simulator's customer reads under `sales` stay as they are. | D | Manifest lint test: no override with `category !== "read"` declares `readAlsoUnder`. |
 | R10 | **CRM → ERP convert is idempotent.** One customer per `crm_contact_id` and one per VAT ID: a second `create_customer` for the same CRM contact or the same VAT ID is refused naming the existing customer id (no duplicate). | A | Two `create_customer` calls, same `crm_contact_id` → second refused with the first's id; same for VAT ID. |
 | R11 | **Revision rule** (`docs/contract.md`) for customers and items: every change produces the next revision, update tools name the revision they change, old revisions are kept. | A, C | Stale `revision` → refused naming both revisions, nothing changed; `get_customer {id, revision}` returns old content. |
-| R12 | **Backward compatible DB.** Every migration is additive, idempotent and runs on Andreas's existing Local DB (demo data) without changing any existing value except adding snapshots (R1). Archived PDFs are never touched. | A, B, C | Migration test on a fixture copied from a 0.9.5 DB: all old invoices still `get_document`-verify; second start is a no-op. |
+| R12 | **Backward compatible DB.** Every migration is additive, idempotent and runs on the maintainer's existing Local DB (demo data) without changing any existing value except adding snapshots (R1). Archived PDFs are never touched. | A, B, C | Migration test on a fixture copied from a 0.9.5 DB: all old invoices still `get_document`-verify; second start is a no-op. |
 
 ---
 
@@ -457,7 +457,7 @@ interface CheckDeclaration {
 type CheckStatus = 'pass' | 'fail' | 'notice' | 'not_checked';
 ```
 
-Rendering (needs a UI-spec change with Andreas's sign-off and an HTML mockup **before** code —
+Rendering (needs a UI-spec change with the maintainer's sign-off and an HTML mockup **before** code —
 `.claude/rules/suveren-ui-spec.md`): `pass` ✓; `fail` ✕ bold red (the only red); `not_checked`
 "–" monochrome + reason ("not checked: VIES unreachable"); `notice` monochrome, no mark (an
 informational line, e.g. a price deviation). `LimitCheckLike` gains `status` (keeps `ok` for old
@@ -771,17 +771,17 @@ merge and branch from it). **A1 is the only serial step**: B and C branch from A
 | **A2 — customers + VIES** | `feat/local-a2-customers` | `src/live/local/tools/customers.ts`, new `vat-id.ts`, `vies.ts`, customer entries in `definitions.ts` / `dispatch.ts`, `src/cli.ts`, `src/live/local/company-file.ts` (none expected), A's tests |
 | **B — quotes** | `feat/local-b-quotes` | `src/live/local/tools/quotes.ts`, `definitions-quotes.ts`, `view-model.ts`, `template.ts`, `templates/angebot-de.v1.json`, `archive.ts` (quote path helper), **the quote-conversion block of `tools/invoices.ts`** (after A1 merged; A does not touch invoices.ts after A1), B's tests |
 | **C — catalogue** | `feat/local-c-items` | `src/live/local/tools/items.ts`, `definitions-items.ts`, `lines.ts` (after A1), C's tests |
-| **D — gateway** | suveren-gateway `feat/erp-local-production` | `content/integrations/erp.json`, `apps/mcp-server/src/lib/{tool-gating-types,manifest-loader,integration-manager,integration-registry,preview}.ts`, new `apps/mcp-server/src/lib/checks.ts`, `apps/ui/src/lib/{receipt-summary,attachment-sealed}.ts`, `apps/ui/src/components/ApprovalBody.tsx`, the connector settings component that renders `modeNotes`, `suveren-as/docs/ui-spec/*` (**spec change first, with Andreas's sign-off**), hap-e2e test |
+| **D — gateway** | suveren-gateway `feat/erp-local-production` | `content/integrations/erp.json`, `apps/mcp-server/src/lib/{tool-gating-types,manifest-loader,integration-manager,integration-registry,preview}.ts`, new `apps/mcp-server/src/lib/checks.ts`, `apps/ui/src/lib/{receipt-summary,attachment-sealed}.ts`, `apps/ui/src/components/ApprovalBody.tsx`, the connector settings component that renders `modeNotes`, `suveren-as/docs/ui-spec/*` (**spec change first, with the maintainer's sign-off**), hap-e2e test |
 | **Profiles** | hap-profiles `feat/invoicing-0.2` (drafted) | `invoicing/0.2.profile.json`, `index.json` |
 | **Release** | coordinator | `package.json` version, `CHANGELOG.md`, `README.md` (each part writes its notes in its PR body) |
 
 Release order: erp-mcp 0.10.0 on npm (A1+A2+B+C merged) → gateway 0.38.0 pins it (`npmVersion`)
 **and** the profile PR merge together (suveren.ai serves profiles live from `main`) → hap-e2e green on
-CI runs that started after both merges. Andreas tests the gateway build before publish.
+CI runs that started after both merges. The maintainer tests the gateway build before publish.
 
 ---
 
-## 10. Open decisions (Andreas)
+## 10. Open decisions (maintainer)
 
 The contract picks a default for each so work can start; changing one is a contract change.
 
@@ -807,9 +807,9 @@ The contract picks a default for each so work can start; changing one is a contr
 | AM1 | **VIES on the card is display-only.** The card's `check_vat_id` read carries volatile fields (`checked_at`, `request_id`, status may flip), so it must NOT take part in the AU4 changed-check (proposal hash vs re-read before execution). Generic manifest declaration on the preview read marks it display-only; the card labels it with its time. `create_customer` / `update_customer_tax_data` re-run VIES at execution and store THAT result (O11). | D (declaration + test), A2 (re-check at execution) | gateway: a create_customer approval survives a second VIES call with a new `request_id` and a status flip |
 | AM2 | **Conversion refuses a changed customer.** If the customer's current revision differs from the quote revision's snapshot `customer_revision`, `create_invoice` with `quote_id` is refused, naming both revisions (mirrors `send_quote`). R8 alone is not enough: a quote to a normal-VAT customer must not convert into a reverse-charge invoice. | B | conversion after a customer tax-data change → refused with both revisions |
 | AM3 | **Migration snapshot wording.** For invoices issued before the migration, the archived PDF (write-once, sha-verified) stays the legal original; the `migrated` snapshot is a best-effort copy taken at migration time. Credit notes on pre-migration invoices render the migrated snapshot. | A1 (doc + migration comment) | — |
-| AM4 | **O3 / O5 for Andreas:** the reviewer recommends refusing to ISSUE a reverse-charge invoice unless the customer's last VIES result is `valid` (saving a not-checked customer stays allowed). O5: connector-assigned quote numbers differ from the invoice rule "the number comes with the request" — decision pending with Andreas. | Coordinator | — |
+| AM4 | **O3 / O5 for the maintainer:** the reviewer recommends refusing to ISSUE a reverse-charge invoice unless the customer's last VIES result is `valid` (saving a not-checked customer stays allowed). O5: connector-assigned quote numbers differ from the invoice rule "the number comes with the request" — decision pending with maintainer. | Coordinator | — |
 
-## 12. Andreas's decisions (2026-10-21) — binding, supersede the defaults above
+## 12. The maintainer's decisions (2026-10-21) — binding, supersede the defaults above
 
 | # | Decision |
 |---|----------|
@@ -827,7 +827,7 @@ The contract picks a default for each so work can start; changing one is a contr
 |---|--------|
 | F1 | One in-process lock serialises every Local tool call (writes; reads queue too, so none sees uncommitted rows); CLI writers take it as well. Transactions are `BEGIN IMMEDIATE` with `busy_timeout`. The archive PDF is written as the last step inside the transaction and deleted if it fails: no burned number, no orphan PDF, no `-r<N>` file blocking the next quote revision. |
 | F2 | M-A2 (snapshot backfill) runs on every start, and before each tool call when a row lacks a snapshot — documents an older erp-mcp writes into a migrated DB get a `migrated` snapshot. |
-| F3 | **Andreas's decision (option A):** an invoice, quote or quote → invoice conversion to a customer outside the EU VAT area (any country other than the home country and the EU member states — incl. XI, CH, GB) is refused before anything is numbered: "Tax treatment for customers outside the EU is not supported yet — nothing was issued." Consumers there (no VAT ID) are refused too: the right treatment depends on what is supplied, consistent with the refusal of EU cross-border customers without a VAT ID. Credit notes on existing invoices stay allowed (they follow the invoice's snapshot). |
+| F3 | **The maintainer's decision (option A):** an invoice, quote or quote → invoice conversion to a customer outside the EU VAT area (any country other than the home country and the EU member states — incl. XI, CH, GB) is refused before anything is numbered: "Tax treatment for customers outside the EU is not supported yet — nothing was issued." Consumers there (no VAT ID) are refused too: the right treatment depends on what is supplied, consistent with the refusal of EU cross-border customers without a VAT ID. Credit notes on existing invoices stay allowed (they follow the invoice's snapshot). |
 | F4 | An invoice or credit-note number is refused when any invoice, credit note **or quote** already uses it, case-insensitively (R7 / D2 both ways). |
 | F5 | `update_quote` requires `revision`. |
 | F6 | Quote → invoice without `lines` copies the quote revision's stored lines incl. `list_price` / `item_revision`; the catalogue is not read again (an inactive or repriced item does not block or change the conversion). |

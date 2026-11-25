@@ -39,7 +39,7 @@ describe("refuseIfInvalidTaxMode", () => {
     expect(() => refuseIfInvalidTaxMode({ ...base, customerCountryCode: "DE", customerUid: null }, 1000)).toThrow(/UID/);
   });
 
-  // Andreas's decision on review finding 3 (option A): outside the EU VAT area
+  // the maintainer's decision on review finding 3 (option A): outside the EU VAT area
   // is refused, with or without a VAT ID (consumer case: see tax.ts).
   it("refuses a customer outside the EU VAT area — CH, GB, US, XI — with or without a VAT ID", () => {
     for (const country of ["CH", "GB", "US", "XI", "xi"]) {

@@ -1,6 +1,6 @@
 /**
  * Local invoicing — the first live system behind this connector's live
- * mode. German/Austrian invoicing law (Andreas, 2026-10-17): an issued
+ * mode. German/Austrian invoicing law (maintainer, 2026-10-17): an issued
  * invoice is never changed or deleted; a correction or cancellation is a
  * CREDIT NOTE with its own number. The number comes WITH the request (no
  * auto-numbering) — the only thing this connector enforces is that it was
@@ -14,7 +14,7 @@
  * fails after the write, the file is deleted again. Every write holds the
  * Local lock (write-lock.ts), so two writes never interleave.
  *
- * `document_date` (Andreas, 2026-10-18) comes WITH the request on
+ * `document_date` (maintainer, 2026-10-18) comes WITH the request on
  * create_invoice/preview_invoice/create_credit_note alike — one consistent
  * name for the printed date on either document kind — and is never replaced
  * by "now": that is what makes a rendered preview and the document actually
@@ -429,7 +429,7 @@ export const create_invoice = locked(async function create_invoice(db: Db, args:
   // approved preview and the issued document could date-drift apart.
   requireDocumentDateIsToday(prepared.documentDate, ctx.company.timezone);
   await requireNumberUnused(db, prepared.number);
-  // D1 (Andreas, 2026-10-21): reverse charge only with a stored VIES `valid`.
+  // D1 (maintainer, 2026-10-21): reverse charge only with a stored VIES `valid`.
   // Checked on the same row the snapshot came from (finding 9).
   if (prepared.taxMode === "reverse_charge") requireViesValidForReverseCharge(prepared.customerRow, "invoice");
 

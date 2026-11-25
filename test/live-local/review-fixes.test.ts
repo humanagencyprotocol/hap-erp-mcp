@@ -133,9 +133,9 @@ describe("finding 1: one write lock, the PDF only with its row", () => {
 
 describe("finding 2: snapshot backfill on every start, and while running", () => {
   const MUSTER_COMPANY_JSON = {
-    name: "Suveren", owner: "Andreas Schadauer MUSTER",
+    name: "Suveren", owner: "Maria Berger MUSTER",
     address: { street: "MUSTER-Straße 1", zip: "1010", city: "Wien", country: "Österreich", country_code: "AT" },
-    uid: "ATU00000000", email: "andreas@sublin.app", web: "www.suveren.ai", register: null,
+    uid: "ATU00000000", email: "owner@example.com", web: "www.suveren.ai", register: null,
     bank: { name: "MUSTER Bank", iban: "AT00", bic: "MUSTERBIC" }, default_payment_term_days: 14, vat_mode: "normal",
   };
 
@@ -163,7 +163,7 @@ describe("finding 2: snapshot backfill on every start, and while running", () =>
   });
 });
 
-describe("finding 3 (Andreas, option A): customers outside the EU VAT area are refused", () => {
+describe("finding 3 (maintainer, option A): customers outside the EU VAT area are refused", () => {
   const OUTSIDE = /^Refused: Tax treatment for customers outside the EU is not supported yet \(customer country (XI|CH)\) — nothing was issued\.$/;
 
   it("XI with a VIES-valid VAT ID: invoice and quote refused, nothing numbered or archived", async () => {
